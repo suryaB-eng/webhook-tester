@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as contracts from "./index.js";
 import {
 	MAX_BODY_BYTES,
 	MAX_IMPORT_BYTES,
@@ -61,7 +62,7 @@ test("preserves valid fields, JSON payloads and scalar expectations", () => {
 		});
 		assert.deepEqual(parseScenarioV1(input), input);
 		assert.deepEqual(scenarioV1Schema.parse(input), input);
-		assert.deepEqual(parseScenarioImport(JSON.stringify(input)), input);
+		assert.throws(() => parseScenarioImport(JSON.stringify(input)));
 	}
 });
 
@@ -307,4 +308,122 @@ test("rejects malformed JSON imports and non-scenario JSON values", () => {
 	]) {
 		assert.throws(() => parseScenarioImport(source));
 	}
+});
+
+test("imports reject unsupported demo events and targets", () => {
+	for (const change of [
+		(document: ReturnType<typeof fixture>) => {
+			document.targetId = "external-target";
+		},
+		(document: ReturnType<typeof fixture>) => {
+			first(document.events).payload.type = "unsupported";
+		},
+		(document: ReturnType<typeof fixture>) => {
+			first(document.events).payload.data.quantity = 11;
+		},
+		(document: ReturnType<typeof fixture>) => {
+			Object.assign(first(document.events).payload, {
+				credentials: "must-not-export",
+			});
+		},
+	]) {
+		const input = fixture();
+		change(input);
+		assert.throws(() => parseScenarioImport(JSON.stringify(input)));
+	}
+});
+
+test("imports reject conflicting business events and inconsistent fixture quantities", () => {
+	for (const sameBusinessId of [true, false]) {
+		const input = fixture();
+		input.events.push({
+			id: "second",
+			payload: {
+				...first(input.events).payload,
+				id: sameBusinessId ? "payment_1" : "payment_2",
+				data: { orderId: "custom-order", quantity: 1 },
+			},
+		});
+		assert.throws(
+			() => parseScenarioImport(JSON.stringify(input)),
+			/conflict|inconsistent/i,
+		);
+	}
+});
+
+test("exports round trip only valid scenario documents with allowlisted target IDs", () => {
+	assert.equal(typeof contracts.serializeScenarioExport, "function");
+	const input = fixture();
+	input.description = "Unicode \u00e9 and \u{1f680}";
+	const source = contracts.serializeScenarioExport(input);
+	assert.deepEqual(JSON.parse(source), input);
+	assert.deepEqual(parseScenarioImport(source), input);
+	for (const injected of [
+		{ ...input, endpoint: "http://outside.invalid/webhook" },
+		{
+			...input,
+			connectionString: "postgres://secret@outside.invalid/database",
+		},
+		{ ...input, targetId: "external-target" },
+		{ ...input, env: { PASSWORD: "secret" } },
+		{ id: "saved", revision: 1, document: input },
+	])
+		assert.throws(() => contracts.serializeScenarioExport(injected));
+});
+
+test("duplicate configuration errors identify the repeated field", () => {
+	for (const collection of ["events", "steps", "assertions"] as const) {
+		const input = fixture();
+		const duplicate = structuredClone(first(input[collection] as unknown[]));
+		if (collection === "steps")
+			Reflect.set(
+				first((duplicate as Fixture["steps"][number]).deliveries),
+				"deliveryId",
+				"another_delivery",
+			);
+		(input[collection] as unknown[]).push(duplicate);
+		assert.throws(
+			() => parseScenarioV1(input),
+			(error: unknown) => {
+				assert.ok(error && typeof error === "object" && "issues" in error);
+				assert.deepEqual(
+					(error.issues as { path: (string | number)[] }[])[0]?.path,
+					[collection, 1, "id"],
+				);
+				return true;
+			},
+		);
+	}
+	const input = fixture();
+	const step = first(input.steps);
+	step.deliveries.push(structuredClone(first(step.deliveries)));
+	assert.throws(
+		() => parseScenarioV1(input),
+		(error: unknown) => {
+			assert.ok(error && typeof error === "object" && "issues" in error);
+			assert.deepEqual(
+				(error.issues as { path: (string | number)[] }[])[0]?.path,
+				["steps", 0, "deliveries", 1, "deliveryId"],
+			);
+			return true;
+		},
+	);
+});
+
+test("imports reject text that cannot round trip through PostgreSQL JSONB", () => {
+	for (const text of [
+		String.fromCharCode(0),
+		String.fromCharCode(0xd800),
+		String.fromCharCode(0xdc00),
+	]) {
+		const input = fixture();
+		input.name = `name${text}`;
+		assert.throws(
+			() => parseScenarioImport(JSON.stringify(input)),
+			/text|Unicode|PostgreSQL/i,
+		);
+	}
+	const input = fixture();
+	input.name = `name ${String.fromCodePoint(0x1f600)}`;
+	assert.deepEqual(parseScenarioImport(JSON.stringify(input)), input);
 });

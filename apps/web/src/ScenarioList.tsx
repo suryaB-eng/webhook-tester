@@ -1,14 +1,30 @@
-import type { PublicTarget, ScenarioSummary } from "@webhook-tester/contracts";
+import type {
+	PublicTarget,
+	ScenarioSummary,
+	ScenarioV1,
+} from "@webhook-tester/contracts";
 import { useEffect, useRef, useState } from "react";
-import { launchRun, loadScenarios, loadTargets } from "./api";
+import {
+	duplicateScenario,
+	launchRun,
+	loadScenario,
+	loadScenarios,
+	loadTargets,
+} from "./api";
+import { downloadScenario, ScenarioImport } from "./ScenarioEditor";
 
-export function ScenarioList() {
+export function ScenarioList({
+	onImport,
+}: {
+	onImport: (document: ScenarioV1) => void;
+}) {
 	const [scenarios, setScenarios] = useState<ScenarioSummary[]>([]);
 	const [targets, setTargets] = useState<PublicTarget[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [launching, setLaunching] = useState<string | null>(null);
 	const [attempt, setAttempt] = useState(0);
+	const [busy, setBusy] = useState<string | null>(null);
 	const launchController = useRef<AbortController | null>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: A retry reloads the server's saved scenarios.
@@ -60,6 +76,31 @@ export function ScenarioList() {
 			if (!controller.signal.aborted) setLaunching(null);
 		}
 	}
+	async function manage(id: string, action: "duplicate" | "export") {
+		const controller = new AbortController();
+		launchController.current = controller;
+		setBusy(`${id}:${action}`);
+		setError(null);
+		try {
+			if (action === "duplicate") {
+				const saved = await duplicateScenario(id, controller.signal);
+				if (!controller.signal.aborted)
+					window.location.hash = `/scenarios/${encodeURIComponent(saved.id)}/edit`;
+			} else {
+				const saved = await loadScenario(id, controller.signal);
+				if (!controller.signal.aborted) downloadScenario(saved.document);
+			}
+		} catch (reason) {
+			if (!controller.signal.aborted)
+				setError(
+					reason instanceof Error
+						? reason.message
+						: "Unable to complete the request.",
+				);
+		} finally {
+			if (!controller.signal.aborted) setBusy(null);
+		}
+	}
 
 	return (
 		<>
@@ -70,10 +111,19 @@ export function ScenarioList() {
 						Run a saved webhook scenario against either profile.
 					</p>
 				</div>
-				{!loading && (
-					<span className="count">{scenarios.length} scenarios</span>
-				)}
+				<div className="item-actions">
+					<a className="button-link primary" href="#/scenarios/new">
+						Create scenario
+					</a>
+					{!loading && (
+						<span className="count">{scenarios.length} scenarios</span>
+					)}
+				</div>
 			</header>
+			<details className="panel">
+				<summary>Import scenario JSON</summary>
+				<ScenarioImport onImport={onImport} />
+			</details>
 			<p className="section-help profile-help">
 				Without deduplication repeats payment effects and overwrites status on
 				arrival. With deduplication applies each payment once and keeps the
@@ -106,12 +156,37 @@ export function ScenarioList() {
 					>
 						<h2 id={`scenario-${scenario.id}`}>{scenario.name}</h2>
 						<p>{scenario.description}</p>
+						<p className="scenario-revision">Revision {scenario.revision}</p>
 						<div className="scenario-actions">
+							<a
+								className="button-link"
+								href={`#/scenarios/${encodeURIComponent(scenario.id)}/edit`}
+							>
+								Edit
+							</a>
+							<button
+								type="button"
+								disabled={busy !== null || launching !== null}
+								onClick={() => void manage(scenario.id, "duplicate")}
+							>
+								{busy === `${scenario.id}:duplicate`
+									? "Duplicating…"
+									: "Duplicate"}
+							</button>
+							<button
+								type="button"
+								disabled={busy !== null || launching !== null}
+								onClick={() => void manage(scenario.id, "export")}
+							>
+								{busy === `${scenario.id}:export`
+									? "Exporting…"
+									: "Export JSON"}
+							</button>
 							{targets.map((target) => (
 								<button
 									key={target.id}
 									type="button"
-									disabled={launching !== null}
+									disabled={launching !== null || busy !== null}
 									onClick={() => void launch(scenario.id, target.id)}
 								>
 									{launching === `${scenario.id}:${target.id}`

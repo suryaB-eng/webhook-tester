@@ -1,5 +1,8 @@
 import { MAX_BODY_BYTES, type PublicTarget } from "@webhook-tester/contracts";
-import { ScenarioNotFoundError } from "@webhook-tester/db";
+import {
+	ScenarioNotFoundError,
+	ScenarioRevisionConflictError,
+} from "@webhook-tester/db";
 import type { Pool } from "pg";
 import Fastify from "fastify";
 import { registerRunRoutes } from "./runs.js";
@@ -31,19 +34,29 @@ export function buildApp(options: ApiOptions = {}) {
 		[...targets.values()].map(({ id, name }) => ({ id, name })),
 	);
 	if (options.appPool) {
-		registerScenarioRoutes(app, options.appPool);
-		registerRunRoutes(
-			app,
-			options.appPool,
-			targets,
-			options.allowedOrigin ?? "http://127.0.0.1:4173",
-		);
+		const allowedOrigin = options.allowedOrigin ?? "http://127.0.0.1:4173";
+		registerScenarioRoutes(app, options.appPool, targets, allowedOrigin);
+		registerRunRoutes(app, options.appPool, targets, allowedOrigin);
 	}
 	app.setErrorHandler((error, request, reply) => {
+		if (error instanceof ScenarioRevisionConflictError)
+			return reply
+				.code(409)
+				.send({ error: error.message, currentRevision: error.currentRevision });
 		if (error instanceof ScenarioNotFoundError)
 			return reply.code(404).send({ error: error.message });
-		if (error instanceof Error && error.name === "ZodError")
-			return reply.code(400).send({ error: "Saved scenario is invalid" });
+		if (
+			typeof error === "object" &&
+			error !== null &&
+			"name" in error &&
+			error.name === "ZodError" &&
+			"issues" in error &&
+			Array.isArray(error.issues)
+		)
+			return reply.code(400).send({
+				error: "Scenario is invalid",
+				issues: "issues" in error ? error.issues : [],
+			});
 		if (
 			error instanceof Error &&
 			"statusCode" in error &&
@@ -51,7 +64,10 @@ export function buildApp(options: ApiOptions = {}) {
 			error.statusCode >= 400 &&
 			error.statusCode < 500
 		) {
-			return reply.code(error.statusCode).send({ error: error.message });
+			return reply.code(error.statusCode).send({
+				error: error.message,
+				...("issues" in error ? { issues: error.issues } : {}),
+			});
 		}
 		request.log.error(error);
 		return reply

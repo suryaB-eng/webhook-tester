@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "node --env-file-if-exists=../../.env --import tsx --watch src/main.ts",
 		"start": "node dist/main.js",
-		"test": "tsx --test src/*.test.ts",
+		"test": "tsx --test --test-concurrency=1 src/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"build": "tsc -p tsconfig.build.json"
 	},

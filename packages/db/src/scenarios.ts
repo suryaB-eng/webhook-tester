@@ -1,11 +1,93 @@
+import { randomUUID } from "node:crypto";
 import {
 	parseScenarioV1,
 	validateDemoScenario,
+	type SavedScenario,
 	type ScenarioSummary,
 	type ScenarioV1,
 } from "@webhook-tester/contracts";
 import type { Pool } from "pg";
 import { withTransaction } from "./index.js";
+import { ScenarioNotFoundError } from "./runs.js";
+
+export class ScenarioRevisionConflictError extends Error {
+	constructor(public readonly currentRevision: number) {
+		super("Scenario was changed by another editor");
+	}
+}
+
+interface ScenarioRow {
+	id: string;
+	revision: number;
+	definition: unknown;
+}
+
+function validatedDocument(input: unknown): ScenarioV1 {
+	const document = parseScenarioV1(input);
+	validateDemoScenario(document);
+	return document;
+}
+
+function savedScenario(row: ScenarioRow): SavedScenario {
+	return {
+		id: row.id,
+		revision: row.revision,
+		document: validatedDocument(row.definition),
+	};
+}
+
+export async function createScenario(
+	pool: Pool,
+	input: unknown,
+): Promise<SavedScenario> {
+	const document = validatedDocument(input);
+	const result = await pool.query<ScenarioRow>(
+		"INSERT INTO scenarios(id,definition) VALUES($1,$2::jsonb) RETURNING id,revision,definition",
+		[randomUUID(), JSON.stringify(document)],
+	);
+	const row = result.rows[0];
+	if (!row) throw new Error("Scenario insertion returned no document");
+	return savedScenario(row);
+}
+
+export async function getScenario(
+	pool: Pool,
+	id: string,
+): Promise<SavedScenario | null> {
+	const result = await pool.query<ScenarioRow>(
+		"SELECT id,revision,definition FROM scenarios WHERE id=$1",
+		[id],
+	);
+	return result.rows[0] ? savedScenario(result.rows[0]) : null;
+}
+
+export async function updateScenario(
+	pool: Pool,
+	id: string,
+	revision: number,
+	input: unknown,
+): Promise<SavedScenario> {
+	const document = validatedDocument(input);
+	return withTransaction(pool, async (client) => {
+		// Lock before comparing so a conflict reports the revision that prevented this save.
+		const current = await client.query<{ revision: number }>(
+			"SELECT revision FROM scenarios WHERE id=$1 FOR UPDATE",
+			[id],
+		);
+		const row = current.rows[0];
+		if (!row) throw new ScenarioNotFoundError("Scenario not found");
+		if (row.revision !== revision)
+			throw new ScenarioRevisionConflictError(row.revision);
+		const result = await client.query<ScenarioRow>(
+			`UPDATE scenarios SET definition=$3::jsonb,revision=revision+1,updated_at=now()
+         WHERE id=$1 AND revision=$2 RETURNING id,revision,definition`,
+			[id, revision, JSON.stringify(document)],
+		);
+		const saved = result.rows[0];
+		if (!saved) throw new Error("Locked scenario update returned no document");
+		return savedScenario(saved);
+	});
+}
 
 function preset(duplicate: boolean): ScenarioV1 {
 	return {
@@ -146,14 +228,15 @@ export async function seedScenarios(pool: Pool): Promise<void> {
 }
 
 export async function listScenarios(pool: Pool): Promise<ScenarioSummary[]> {
-	const result = await pool.query<{ id: string; definition: unknown }>(
-		"SELECT id, definition FROM scenarios ORDER BY created_at,id",
+	const result = await pool.query<ScenarioRow>(
+		"SELECT id,revision,definition FROM scenarios ORDER BY created_at,id",
 	);
 	return result.rows.map((row) => {
 		const scenario = parseScenarioV1(row.definition);
 		validateDemoScenario(scenario);
 		return {
 			id: row.id,
+			revision: row.revision,
 			name: scenario.name,
 			description: scenario.description,
 			scenario,

@@ -11,7 +11,13 @@ export interface PublicTarget {
 	id: string;
 	name: string;
 }
+export interface SavedScenario {
+	id: string;
+	revision: number;
+	document: ScenarioV1;
+}
 export interface ScenarioSummary {
+	revision: number;
 	id: string;
 	name: string;
 	description: string;

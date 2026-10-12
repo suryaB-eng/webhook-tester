@@ -17,7 +17,9 @@ Invoke-RestMethod http://127.0.0.1:4000/health
 Open http://127.0.0.1:4173. Choose a scenario and either
 **Without deduplication** or **With deduplication**. The run page reads saved
 results and survives refresh. Select a delivery to inspect its payload, response,
-and timings.
+and timings. Create or edit a scenario, duplicate a saved scenario, or import/export
+its JSON document. Drafts stay local until Save; a revision conflict preserves
+the draft instead of replacing the newer saved scenario.
 
 Web, API, demo target, and PostgreSQL bind to host loopback on ports
 4173, 4000, 4010, and 55432. The worker publishes no port.
@@ -32,6 +34,8 @@ database passwords. Stop services with `docker compose down`.
 - Four saved presets: One payment, Sequential duplicate payment, Concurrent
   duplicate payment, and Status version 2 before version 1. Restarting the API
   inserts missing presets without replacing saved edits.
+- Scenario creation, revision-checked editing, duplication, and strict JSON
+  import/export (1 MiB UTF-8 limit), with field-specific validation.
 - Validated scenarios, server-selected profiles, and queued runs with immutable
   scenario and public target snapshots.
 - A separate worker with PostgreSQL ownership, sequential and bounded concurrent
@@ -54,9 +58,9 @@ Abandoned runs become interrupted and are never automatically replayed. Cleanup 
 
 **Next up**
 
-- Scenario authoring.
+- Stronger recovery and live run updates.
 
-Scenario authoring is intended and is not implemented.
+These are intended and are not implemented.
 
 ## Development
 
@@ -94,6 +98,12 @@ docker compose -f compose.test.yaml down
 docker compose start worker
 ```
 
+For an editor check, duplicate One payment, edit its name, save, export JSON,
+and import it into a new local draft. Save the imported draft and run it with
+With deduplication. Open one saved scenario in two tabs at the same revision;
+save a name change in the first, then save a different change in the second.
+The second tab must show the conflict and keep its unsaved text.
+
 For a concurrent duplicate-payment API check:
 
 ```powershell
@@ -117,7 +127,7 @@ The same GET URL always reads that saved run; it does not launch another run.
 See [architecture](docs/architecture.md) for service boundaries.
 
 Dependency/configuration choices, validation, transaction, enqueue/snapshot,
-scalar assertion, delivery scheduling, and bounded response patterns were adapted
+scalar assertion, delivery scheduling, editor validation, and bounded response patterns were adapted
 from relevant modules of `suryaB-eng/webhook-lab` at
 `e6a761182bd338f68dd439e260bb25b3d91bb44c`. Its Git history was not imported.
 The reference MIT notice is preserved in [LICENSE](LICENSE).

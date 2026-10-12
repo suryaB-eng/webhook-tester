@@ -285,3 +285,52 @@ test("accepts identical logical-event duplicates and returns only unique deliver
 		{ orderId: "second-order", quantity: 5 },
 	]);
 });
+
+test("demo validation reports full field paths for payload, target and consistency errors", () => {
+	for (const [modify, expectedPath] of [
+		[
+			(scenario: ScenarioV1) => {
+				scenario.targetId = "external";
+			},
+			["targetId"],
+		],
+		[
+			(scenario: ScenarioV1) => {
+				const event = scenario.events[0];
+				assert.ok(event);
+				event.payload.type = "unsupported";
+			},
+			["events", 0, "payload", "type"],
+		],
+		[
+			(scenario: ScenarioV1) => {
+				scenario.events.push({
+					id: "another",
+					payload: payment("payment_1", "other", 2),
+				});
+			},
+			["events", 1, "payload", "id"],
+		],
+		[
+			(scenario: ScenarioV1) => {
+				scenario.events.push({
+					id: "another",
+					payload: payment("payment_2", "custom-order", 1),
+				});
+			},
+			["events", 1, "payload", "data", "quantity"],
+		],
+	] as const) {
+		const scenario = fixture();
+		modify(scenario);
+		assert.throws(
+			() => validateDemoScenario(scenario),
+			(error: unknown) => {
+				assert.ok(error && typeof error === "object" && "issues" in error);
+				const issues = error.issues as { path: (string | number)[] }[];
+				assert.deepEqual(issues[0]?.path, expectedPath);
+				return true;
+			},
+		);
+	}
+});

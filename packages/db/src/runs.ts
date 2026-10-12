@@ -61,7 +61,7 @@ async function insertEvidence(
 export async function enqueueRun(
 	pool: Pool,
 	scenarioId: string,
-	target: PublicTarget,
+	targetSelection: PublicTarget | ((scenario: ScenarioV1) => PublicTarget),
 ): Promise<string> {
 	return withTransaction(pool, async (client) => {
 		const result = await client.query<{ definition: unknown }>(
@@ -71,6 +71,10 @@ export async function enqueueRun(
 		const row = result.rows[0];
 		if (!row) throw new ScenarioNotFoundError("Scenario not found");
 		const stored = parseScenarioV1(row.definition);
+		const target =
+			typeof targetSelection === "function"
+				? targetSelection(stored)
+				: targetSelection;
 		const scenario = parseScenarioV1({ ...stored, targetId: target.id });
 		validateDemoScenario(scenario);
 		if (!target.name.trim()) throw new Error("Target name is required");

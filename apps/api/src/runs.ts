@@ -2,6 +2,7 @@ import type { PublicTarget } from "@webhook-tester/contracts";
 import { enqueueRun, getRun } from "@webhook-tester/db";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
+import { localJsonMutation } from "./mutation.js";
 
 interface LaunchBody {
 	scenarioId: string;
@@ -19,22 +20,7 @@ export function registerRunRoutes(
 	app.post<{ Body: LaunchBody }>(
 		"/api/runs",
 		{
-			onRequest: async (request, reply) => {
-				if (request.headers.origin !== allowedOrigin)
-					return reply
-						.code(403)
-						.send({ error: "A configured local Origin is required" });
-				if (
-					request.headers["content-type"]
-						?.split(";")[0]
-						?.trim()
-						.toLowerCase() !== "application/json"
-				) {
-					return reply
-						.code(415)
-						.send({ error: "Content-Type must be application/json" });
-				}
-			},
+			onRequest: localJsonMutation(allowedOrigin),
 			schema: {
 				body: {
 					type: "object",
@@ -48,25 +34,20 @@ export function registerRunRoutes(
 			},
 		},
 		async (request, reply) => {
-			let targetId = request.body.targetId;
-			if (!targetId) {
-				const result = await pool.query<{ definition: { targetId?: unknown } }>(
-					"SELECT definition FROM scenarios WHERE id=$1",
-					[request.body.scenarioId],
-				);
-				if (!result.rows[0])
-					return reply.code(404).send({ error: "Scenario not found" });
-				const savedTarget = result.rows[0].definition.targetId;
-				if (typeof savedTarget !== "string")
-					return reply
-						.code(400)
-						.send({ error: "Saved scenario target is invalid" });
-				targetId = savedTarget;
-			}
-			const target = targets.get(targetId);
-			if (!target)
-				return reply.code(400).send({ error: "Target is not configured" });
-			const runId = await enqueueRun(pool, request.body.scenarioId, target);
+			const runId = await enqueueRun(
+				pool,
+				request.body.scenarioId,
+				(scenario) => {
+					const target = targets.get(
+						request.body.targetId ?? scenario.targetId,
+					);
+					if (!target)
+						throw Object.assign(new Error("Target is not configured"), {
+							statusCode: 400,
+						});
+					return target;
+				},
+			);
 			return reply.code(202).send({ runId });
 		},
 	);

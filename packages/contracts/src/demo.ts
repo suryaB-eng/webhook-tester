@@ -3,7 +3,7 @@ import {
 	businessIdSchema,
 	parseScenarioV1,
 	type ScenarioV1,
-} from "./scenario.js";
+} from "./scenario-schema.js";
 export const demoTargetIds = ["demo-flawed", "demo-corrected"] as const;
 export const demoPaymentSchema = z.strictObject({
 	id: businessIdSchema,
@@ -19,14 +19,7 @@ export const demoStatusSchema = z.strictObject({
 	type: z.literal("order.status_changed"),
 	data: z.strictObject({
 		orderId: businessIdSchema,
-		status: z
-			.string()
-			.min(1)
-			.max(100)
-			.refine(
-				(value) => value.trim().length > 0,
-				"must not be whitespace-only",
-			),
+		status: businessIdSchema.max(100),
 		version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
 	}),
 });
@@ -40,25 +33,47 @@ export type DemoEvent = z.infer<typeof demoEventSchema>;
 export function validateDemoScenario(scenario: ScenarioV1): void {
 	const parsed = parseScenarioV1(scenario);
 	if (!demoTargetIds.some((targetId) => targetId === parsed.targetId)) {
-		throw new Error(`unsupported demo target: ${parsed.targetId}`);
+		throw new z.ZodError([
+			{
+				code: "custom",
+				path: ["targetId"],
+				message: `unsupported demo target: ${parsed.targetId}`,
+			},
+		]);
 	}
 	const events = new Map<string, DemoEvent>();
 	const orderQuantities = new Map<string, number>();
-	for (const event of parsed.events) {
-		const payload = demoEventSchema.parse(event.payload);
+	for (const [index, event] of parsed.events.entries()) {
+		const result = demoEventSchema.safeParse(event.payload);
+		if (!result.success)
+			throw new z.ZodError(
+				result.error.issues.map((issue) => ({
+					...issue,
+					path: ["events", index, "payload", ...issue.path],
+				})),
+			);
+		const payload = result.data;
 		const previous = events.get(payload.id);
 		if (previous && JSON.stringify(previous) !== JSON.stringify(payload)) {
-			throw new Error(
-				`conflicting payload for logical event ID: ${payload.id}`,
-			);
+			throw new z.ZodError([
+				{
+					code: "custom",
+					path: ["events", index, "payload", "id"],
+					message: `conflicting payload for logical event ID: ${payload.id}`,
+				},
+			]);
 		}
 		events.set(payload.id, payload);
 		if (payload.type !== "payment.succeeded") continue;
 		const quantity = orderQuantities.get(payload.data.orderId);
 		if (quantity !== undefined && quantity !== payload.data.quantity) {
-			throw new Error(
-				`inconsistent quantity for order: ${payload.data.orderId}`,
-			);
+			throw new z.ZodError([
+				{
+					code: "custom",
+					path: ["events", index, "payload", "data", "quantity"],
+					message: `inconsistent quantity for order: ${payload.data.orderId}`,
+				},
+			]);
 		}
 		orderQuantities.set(payload.data.orderId, payload.data.quantity);
 	}
