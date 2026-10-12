@@ -19,15 +19,48 @@ services:
       retries: 30
       start_period: 10s
 
+  migrate:
+    build: .
+    command: ["node", "packages/db/dist/migrate.js"]
+    environment:
+      ADMIN_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-superuser_local_only}@postgres:5432/postgres
+      APP_DATABASE_URL: postgresql://webhook_tester_app:app_local_only@postgres:5432/webhook_tester
+      TARGET_OWNER_DATABASE_URL: postgresql://demo_target_owner:target_owner_local_only@postgres:5432/demo_target
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 4000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:4000:4000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(async r=>{if(!r.ok||(await r.json()).status!=='ok')process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  demo-target:
+    build: .
+    command: ["npm", "run", "start", "-w", "@webhook-tester/demo-target"]
+    environment:
+      DEMO_TARGET_HOST: 0.0.0.0
+      DEMO_TARGET_PORT: 4010
+      TARGET_APP_DATABASE_URL: postgresql://demo_target_app:target_app_local_only@postgres:5432/demo_target
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:4010:4010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then(async r=>{if(!r.ok||(await r.json()).status!=='ok')process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 5s
       retries: 30

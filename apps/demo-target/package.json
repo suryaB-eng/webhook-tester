@@ -1,0 +1,22 @@
+{
+	"name": "@webhook-tester/demo-target",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "node --env-file-if-exists=../../.env --import tsx --watch src/main.ts",
+		"start": "node dist/main.js",
+		"test": "tsx --test src/app.integration.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build": "tsc -p tsconfig.build.json"
+	},
+	"dependencies": {
+		"@webhook-tester/contracts": "0.1.0",
+		"@webhook-tester/db": "0.1.0",
+		"fastify": "5.12.4",
+		"pg": "8.23.0"
+	},
+	"devDependencies": {
+		"@types/pg": "8.23.1"
+	}
+}

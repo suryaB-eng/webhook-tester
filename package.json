@@ -4,15 +4,28 @@
   "private": true,
   "type": "module",
   "packageManager": "npm@10.9.2",
-  "engines": { "node": ">=22.14.0" },
-  "workspaces": ["apps/api", "apps/web"],
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "workspaces": [
+    "packages/contracts",
+    "packages/db",
+    "apps/api",
+    "apps/demo-target",
+    "apps/web"
+  ],
   "scripts": {
     "dev:api": "npm run dev -w @webhook-tester/api",
     "dev:web": "npm run dev -w @webhook-tester/web",
     "lint": "biome lint .",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",
-    "build": "npm run build --workspaces"
+    "build": "npm run build --workspaces",
+    "build:shared": "npm run build -w @webhook-tester/contracts && npm run build -w @webhook-tester/db",
+    "pretypecheck": "npm run build:shared",
+    "pretest": "npm run build:shared",
+    "migrate": "npm run build:shared && node --env-file-if-exists=.env packages/db/dist/migrate.js",
+    "dev:demo": "npm run build:shared && npm run dev -w @webhook-tester/demo-target"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
