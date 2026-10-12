@@ -10,7 +10,7 @@ import {
 
 async function applyFiles(
 	client: PoolClient,
-	scope: "admin" | "target",
+	scope: "admin" | "app" | "target",
 	migrationsDirectory: URL,
 ): Promise<void> {
 	await client.query(`CREATE TABLE IF NOT EXISTS public.schema_migrations (
@@ -68,10 +68,14 @@ export async function runMigrations(
 		locked = true;
 		await applyFiles(lock, "admin", migrationsDirectory);
 		await withTransaction(applicationAdmin, async (client) => {
-			await client.query(
-				"REVOKE ALL ON SCHEMA public FROM PUBLIC, webhook_tester_app",
-			);
+			await client.query("REVOKE ALL ON SCHEMA public FROM PUBLIC");
 		});
+		const appAdmin = await applicationAdmin.connect();
+		try {
+			await applyFiles(appAdmin, "app", migrationsDirectory);
+		} finally {
+			appAdmin.release();
+		}
 		const owner = await target.connect();
 		try {
 			await applyFiles(owner, "target", migrationsDirectory);

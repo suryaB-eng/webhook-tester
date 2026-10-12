@@ -1,14 +1,19 @@
 {
-  "name": "@webhook-tester/api",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js",
-    "test": "tsx --test src/app.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "tsc -p tsconfig.build.json"
-  },
-  "dependencies": { "fastify": "5.12.4" }
+	"name": "@webhook-tester/api",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "node --env-file-if-exists=../../.env --import tsx --watch src/main.ts",
+		"start": "node dist/main.js",
+		"test": "tsx --test src/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build": "tsc -p tsconfig.build.json"
+	},
+	"dependencies": {
+		"fastify": "5.12.4",
+		"@webhook-tester/contracts": "0.1.0",
+		"@webhook-tester/db": "0.1.0",
+		"pg": "8.23.0"
+	}
 }

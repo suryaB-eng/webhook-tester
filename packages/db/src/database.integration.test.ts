@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import {
 	cleanupDemoFixtures,
+	connectWithTimeout,
 	createPool,
 	databaseUrls,
 	prepareDemoFixtures,
@@ -139,22 +147,31 @@ describe("isolated PostgreSQL database contracts", {
 		const copiedDirectory = pathToFileURL(`${directory}${sep}`);
 		const copies: { path: string; sql: string }[] = [];
 		try {
-			for (const scope of ["admin", "target"]) {
+			for (const scope of ["admin", "app", "target"]) {
 				await mkdir(join(directory, scope));
 				const source = new URL(`../migrations/${scope}/`, import.meta.url);
-				for (const name of (await readdir(source)).filter((name) => name.endsWith(".sql"))) {
-					const sql = (await readFile(new URL(name, source), "utf8")).replace(/\r\n/g, "\n");
+				for (const name of (await readdir(source)).filter((name) =>
+					name.endsWith(".sql"),
+				)) {
+					const sql = (await readFile(new URL(name, source), "utf8")).replace(
+						/\r\n/g,
+						"\n",
+					);
 					const path = join(directory, scope, name);
 					copies.push({ path, sql });
 					await writeFile(path, sql);
 				}
 			}
 			await runMigrations(urls, copiedDirectory);
-			for (const { path, sql } of copies) await writeFile(path, sql.replace(/\n/g, "\r\n"));
+			for (const { path, sql } of copies)
+				await writeFile(path, sql.replace(/\n/g, "\r\n"));
 			await runMigrations(urls, copiedDirectory);
 			for (const { path, sql } of copies) {
 				await writeFile(path, `${sql}\nSELECT 1;\n`);
-				await assert.rejects(runMigrations(urls, copiedDirectory), /Applied migration has changed/);
+				await assert.rejects(
+					runMigrations(urls, copiedDirectory),
+					/Applied migration has changed/,
+				);
 				await writeFile(path, sql);
 			}
 			await runMigrations(urls);
@@ -299,7 +316,131 @@ describe("isolated PostgreSQL database contracts", {
 		assert.equal(await withTransaction(pools.fixture, async () => 42), 42);
 	});
 
-	it("restricts the application login to CONNECT without table or creation rights", async () => {
+	it("fixture budgets cancel blocked preparation and cleanup without touching another run", async () => {
+		const id = run();
+		const other = run();
+		await prepareDemoFixtures(pools.fixture, id, [
+			{ orderId: "keep", quantity: 1 },
+		]);
+		await prepareDemoFixtures(pools.fixture, other, [
+			{ orderId: "other", quantity: 2 },
+		]);
+		for (const operation of [
+			() =>
+				prepareDemoFixtures(
+					pools.fixture,
+					id,
+					[{ orderId: "replace", quantity: 1 }],
+					{ timeoutMs: 100 },
+				),
+			() => cleanupDemoFixtures(pools.fixture, id, { timeoutMs: 100 }),
+		]) {
+			const locker = await pools.owner.connect();
+			let release: Promise<unknown> | undefined;
+			try {
+				await locker.query("BEGIN");
+				await locker.query("LOCK TABLE orders IN SHARE MODE");
+				// Release even on the old unbounded implementation, so the regression cannot hang.
+				release = new Promise<void>((resolve) => setTimeout(resolve, 200)).then(
+					() => locker.query("ROLLBACK"),
+				);
+				await assert.rejects(
+					operation(),
+					/statement timeout|fixture.*timeout|fixture.*budget/i,
+				);
+				await release;
+			} finally {
+				if (release) await release;
+				else await locker.query("ROLLBACK");
+				locker.release();
+			}
+			assert.deepEqual(
+				(
+					await pools.query.query(
+						"SELECT order_id,quantity FROM orders WHERE run_id=$1",
+						[id],
+					)
+				).rows,
+				[{ order_id: "keep", quantity: 1 }],
+			);
+			assert.deepEqual(
+				(
+					await pools.query.query(
+						"SELECT order_id,quantity FROM orders WHERE run_id=$1",
+						[other],
+					)
+				).rows,
+				[{ order_id: "other", quantity: 2 }],
+			);
+			assert.equal(
+				(
+					await pools.query.query(
+						"SELECT quantity FROM inventory WHERE run_id=$1",
+						[id],
+					)
+				).rows[0]?.quantity,
+				10,
+			);
+		}
+	});
+	it("fixture connection acquisition times out while the only session is held and releases late clients", async () => {
+		const scarce = new Pool({
+			connectionString: urls.targetFixture,
+			max: 1,
+			connectionTimeoutMillis: 5000,
+		});
+		const id = run();
+		const held = await scarce.connect();
+		let released = false;
+		const releaseHeld = () => {
+			if (!released) {
+				released = true;
+				held.release();
+			}
+		};
+		// The old acquisition path eventually exits too, so a regression cannot hang cleanup.
+		const timer = setTimeout(releaseHeld, 200);
+		try {
+			await assert.rejects(
+				prepareDemoFixtures(
+					scarce,
+					id,
+					[{ orderId: "not-created", quantity: 1 }],
+					{ timeoutMs: 100 },
+				),
+				/timeout/i,
+			);
+			assert.equal(
+				released,
+				false,
+				"the budget must expire before the held session is released",
+			);
+			releaseHeld();
+			const recovered = await connectWithTimeout(scarce, 500);
+			try {
+				assert.equal(
+					(await recovered.query("SELECT 1 AS value")).rows[0]?.value,
+					1,
+				);
+			} finally {
+				recovered.release();
+			}
+			assert.equal(
+				(
+					await pools.query.query(
+						"SELECT count(*)::int AS value FROM orders WHERE run_id=$1",
+						[id],
+					)
+				).rows[0]?.value,
+				0,
+			);
+		} finally {
+			clearTimeout(timer);
+			releaseHeld();
+			await scarce.end();
+		}
+	});
+	it("allows current application storage operations but denies creation and target access", async () => {
 		assert.equal(
 			(await pools.app.query("SELECT current_database() AS name")).rows[0].name,
 			"webhook_tester",
@@ -322,11 +463,14 @@ describe("isolated PostgreSQL database contracts", {
 		assert.equal(
 			(
 				await pools.app.query(
-					"SELECT count(*)::int AS count FROM pg_tables WHERE schemaname='public'",
+					"SELECT count(*)::int AS count FROM pg_tables WHERE schemaname='public' AND tablename IN ('scenarios','runs','jobs','deliveries','assertions')",
 				)
 			).rows[0].count,
-			0,
+			5,
 		);
+		await assert.rejects(pools.app.query("SELECT * FROM schema_migrations"), {
+			code: "42501",
+		});
 		const cross = new URL(urls.app);
 		cross.pathname = "/demo_target";
 		const crossPool = createPool(cross.toString());

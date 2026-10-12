@@ -1,6 +1,6 @@
 # Webhook tester
 
-A local workspace for testing webhooks.
+A local workspace for testing payment webhooks.
 
 ## Quick start
 
@@ -11,121 +11,111 @@ From the repository directory in PowerShell:
 npm.cmd ci
 Copy-Item .env.example .env
 docker compose up --build -d --wait
-Invoke-RestMethod http://127.0.0.1:4000/health | ConvertTo-Json -Compress
-Invoke-RestMethod http://127.0.0.1:4010/health | ConvertTo-Json -Compress
+Invoke-RestMethod http://127.0.0.1:4000/health
 ```
 
-Both health responses are `{"status":"ok"}`. Open http://127.0.0.1:4173.
-The shell shows an empty scenario list and checks the real API connection.
+Open http://127.0.0.1:4173. Choose a scenario and either
+**Without deduplication** or **With deduplication**. The run page reads saved
+results and survives refresh. Select a delivery to inspect its payload, response,
+and timings.
 
-Web, API, demo target, and PostgreSQL host ports bind to `127.0.0.1` at
-4173, 4000, 4010, and 55432. Local credentials in `.env.example` are disposable.
-Compose applies migrations before starting dependent services. Existing local
-volumes are upgraded without deleting data. Database initialization runs only
-on a fresh volume; changing `.env` does not change existing passwords.
-Stop services with `docker compose down`.
+Web, API, demo target, and PostgreSQL bind to host loopback on ports
+4173, 4000, 4010, and 55432. The worker publishes no port.
+Local credentials in `.env.example` are disposable. Compose migrates existing
+local volumes before services start; changing `.env` does not change existing
+database passwords. Stop services with `docker compose down`.
 
 ## Project status
 
 **Working now**
 
-- React web shell, empty scenario state, and Fastify API health endpoint.
-- Shared `ScenarioV1` validation with sequential steps, unique configuration IDs,
-  checked event references, scalar assertion expectations, and bounded limits/imports.
-- Payment demo profiles at `POST /webhooks/flawed` and `POST /webhooks/corrected`.
-- Run-scoped payment fixtures, transactional effects, and separate application,
-  fixture, and SELECT-only assertion database logins.
+- Two saved presets: One payment and Sequential duplicate payment. Restarting
+  the API seeds missing presets without replacing saved edits.
+- Validated sequential scenarios, server-selected payment profiles, and queued
+  runs with immutable scenario and public target snapshots.
+- A separate worker with PostgreSQL ownership, sequential delivery, bounded
+  responses, timeouts, and SELECT-only scalar assertions.
+- Saved request/response details, timestamps, assertion expectations/results,
+  and run status, shown through real API polling.
+- Run-scoped fixtures and transactional flawed/corrected payment handlers.
 
-The flawed profile repeats effects for every delivery. The corrected profile
-deduplicates by the payment's business-event `id` and guards the unpaid-to-paid
-transition. Its claim, stock decrement, and fulfillment commit together.
-Failed effects roll everything back. Transport delivery IDs do not deduplicate.
+One payment passes both profiles with fulfillment count 1 and inventory 9.
+Sequential duplicate payment returns HTTP 200 twice on both profiles, but
+Without deduplication fails its assertions at 2/8; With deduplication passes at 1/9.
 
-Only `demo-flawed` and `demo-corrected` scenarios are supported by demo validation.
-Payloads are `{id, type:"payment.succeeded", data:{orderId, quantity}}`, with integer
-quantity 1–10. Order IDs can vary; a shared order must have a consistent quantity.
-Conflicting payloads for a shared business-event ID are rejected.
-Limits are 100 total deliveries, concurrency 1–10, delay 0–5000 ms, request timeout
-100–10000 ms, run timeout 1000–60000 ms, and 1 MiB bodies/imports.
-Concurrent step mode is rejected. Assertions are validated, not executed yet.
+Normal completion saves results before removing that run's fixtures.
+Transport timeouts, ownership loss, and failed result writes retain run-scoped
+fixtures so uncertain work and unsaved observations remain inspectable.
+Abandoned runs become interrupted and are never
+automatically replayed. Cleanup failure is an error.
 
 **Next up**
 
-- Scenario authoring and persistence.
-- Webhook execution in a separate worker.
+- Scenario authoring.
+- Concurrent delivery and additional execution profiles.
 
-These next features are intended and are not implemented.
+These features are intended and are not implemented.
 
 ## Development
 
+For native development, start PostgreSQL and apply migrations:
+
 ```powershell
-npm.cmd run build:shared
+docker compose up -d --wait postgres
 npm.cmd run migrate
+npm.cmd run build:shared
 npm.cmd run dev:api
 # In separate terminals:
-npm.cmd run dev:web
 npm.cmd run dev:demo
+npm.cmd run dev:worker
+npm.cmd run dev:web
 ```
 
-For native development, start PostgreSQL with `docker compose up -d --wait postgres`.
-Migration and demo commands load the root `.env` if present. API/web commands
-use their existing defaults; set their environment overrides in PowerShell.
-The current API still does not access the application database.
+Stop the Compose worker before running a native or test-owned worker.
+API, demo, migration, and worker commands load the root `.env` if present.
+`LOCAL_ORIGIN` must match the browser origin (default `http://127.0.0.1:4173`);
+mutation requests require that Origin header and JSON. Target endpoints come
+from server configuration, never browser input.
 
-Tests use a separate PostgreSQL instance on loopback port 55433, stored in
-disposable container memory. They check its dedicated database marker before
-mutations and clean only generated run IDs.
+Tests use a separate PostgreSQL instance on loopback 55433 with disposable
+container storage and a dedicated database marker. They do not use the normal
+application database URLs.
 
 ```powershell
+docker compose stop worker
 docker compose -f compose.test.yaml up -d --wait
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run build
 docker compose -f compose.test.yaml down
+docker compose start worker
 ```
 
-Tests cover contract rejection, migration repeatability, role privileges,
-payment effects and rollback, changed transport IDs, and fixture isolation.
-Shared exports build before tests and typechecking.
-
-For an API check after building, this PowerShell example prepares a fresh run,
-sends the same payment twice to the corrected service, reads effects, and cleans up:
+For a duplicate-payment API check:
 
 ```powershell
-@'
-import { randomUUID } from 'node:crypto';
-import { createPool, databaseUrls, prepareDemoFixtures, cleanupDemoFixtures } from '@webhook-tester/db';
-const urls = databaseUrls();
-const fixture = createPool(urls.targetFixture);
-const query = createPool(urls.targetQuery);
-const runId = randomUUID();
-try {
-  await prepareDemoFixtures(fixture, runId, [{ orderId: 'order_example', quantity: 2 }]);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await fetch('http://127.0.0.1:4010/webhooks/corrected', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-Webhook-Lab-Run-Id': runId },
-      body: JSON.stringify({ id: 'payment_example', type: 'payment.succeeded', data: { orderId: 'order_example', quantity: 2 } }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-  }
-  console.log((await query.query("SELECT (SELECT count(*)::int FROM fulfillments WHERE run_id=$1) AS fulfillments, (SELECT quantity FROM inventory WHERE run_id=$1 AND sku='sku_001') AS stock", [runId])).rows[0]);
-} finally {
-  await cleanupDemoFixtures(fixture, runId);
-  await Promise.all([fixture.end(), query.end()]);
-}
-'@ | node --env-file-if-exists=.env --input-type=module
+$headers = @{ Origin = "http://127.0.0.1:4173" }
+$body = @{ scenarioId = "sequential-duplicate-payment"; targetId = "demo-flawed" } | ConvertTo-Json
+$queued = Invoke-RestMethod http://127.0.0.1:4000/api/runs -Method Post -Headers $headers -ContentType "application/json" -Body $body
+$deadline = (Get-Date).AddSeconds(60)
+do {
+    Start-Sleep -Milliseconds 250
+    $run = Invoke-RestMethod "http://127.0.0.1:4000/api/runs/$($queued.runId)"
+    if ((Get-Date) -gt $deadline) { throw "Run has not completed; inspect the worker logs." }
+} while ($run.status -in @("queued", "running"))
+$run | ConvertTo-Json -Depth 20
 ```
 
-Expected: fulfillment count 1, stock 8. Change the endpoint to `flawed` for
-count 2, stock 6. Each invocation uses a new run. Fixture preparation replaces
-only that run's rows; `demoOrders(validatedScenario)` derives its referenced orders.
+Expect `failed`, delivery statuses 200/200, and assertion actuals 2 and 8.
+Use `demo-corrected` for `passed`, 200/200, and actuals 1 and 9.
+The same GET URL always reads that saved run; it does not launch another run.
 
 `npm.cmd` avoids PowerShell restrictions on `npm.ps1`.
 See [architecture](docs/architecture.md) for service boundaries.
 
-Dependency/configuration choices, scenario validation, and payment transaction
-patterns were adapted from relevant modules of `suryaB-eng/webhook-lab` at
+Dependency/configuration choices, validation, transaction, enqueue/snapshot,
+scalar assertion, and bounded response patterns were adapted from relevant
+modules of `suryaB-eng/webhook-lab` at
 `e6a761182bd338f68dd439e260bb25b3d91bb44c`. Its Git history was not imported.
-The reference MIT copyright notice is preserved in [LICENSE](LICENSE).
+The reference MIT notice is preserved in [LICENSE](LICENSE).

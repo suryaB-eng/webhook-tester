@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient } from "pg";
 
 export interface DatabaseUrls {
@@ -38,11 +39,43 @@ export function databaseUrls(
 	};
 }
 
+export async function connectWithTimeout(
+	pool: Pool,
+	timeoutMs: number,
+): Promise<PoolClient> {
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		throw new Error("Database connection timeout");
+	}
+	return new Promise<PoolClient>((resolve, reject) => {
+		let expired = false;
+		const timer = setTimeout(() => {
+			expired = true;
+			reject(new Error("Database connection timeout"));
+		}, timeoutMs);
+		Promise.resolve()
+			.then(() => pool.connect())
+			.then(
+				(client) => {
+					clearTimeout(timer);
+					// pg cannot remove a pending acquisition; return a late session immediately.
+					if (expired) client.release();
+					else resolve(client);
+				},
+				(error: unknown) => {
+					clearTimeout(timer);
+					if (!expired) reject(error);
+				},
+			);
+	});
+}
 export async function withTransaction<T>(
 	pool: Pool,
 	operation: (client: PoolClient) => Promise<T>,
+	options?: { deadline: number },
 ): Promise<T> {
-	const client = await pool.connect();
+	const client = options
+		? await connectWithTimeout(pool, options.deadline - performance.now())
+		: await pool.connect();
 	let discard = false;
 	try {
 		await client.query("BEGIN");
@@ -73,20 +106,53 @@ function validateRunId(runId: string): void {
 	}
 }
 
-async function deleteRun(client: PoolClient, runId: string): Promise<void> {
-	await client.query("DELETE FROM processed_business_events WHERE run_id=$1", [
-		runId,
-	]);
-	await client.query("DELETE FROM fulfillments WHERE run_id=$1", [runId]);
-	await client.query("DELETE FROM orders WHERE run_id=$1", [runId]);
-	await client.query("DELETE FROM inventory WHERE run_id=$1", [runId]);
+export interface FixtureOptions {
+	timeoutMs: number;
 }
 
+function fixtureDeadline(options?: FixtureOptions): number | undefined {
+	if (!options) return undefined;
+	if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
+		throw new Error("Fixture timeout must be a positive number");
+	}
+	// Include connection acquisition in the budget rather than starting it after BEGIN.
+	return performance.now() + options.timeoutMs;
+}
+
+async function setFixtureBudget(
+	client: PoolClient,
+	deadline?: number,
+): Promise<void> {
+	if (deadline === undefined) return;
+	const remaining = Math.floor(deadline - performance.now());
+	if (remaining <= 0) throw new Error("Fixture timeout exceeded");
+	await client.query("SELECT set_config('statement_timeout',$1,true)", [
+		`${remaining}ms`,
+	]);
+}
+
+async function deleteRun(
+	client: PoolClient,
+	runId: string,
+	deadline?: number,
+): Promise<void> {
+	for (const table of [
+		"processed_business_events",
+		"fulfillments",
+		"orders",
+		"inventory",
+	]) {
+		await setFixtureBudget(client, deadline);
+		await client.query(`DELETE FROM ${table} WHERE run_id=$1`, [runId]);
+	}
+}
 export async function prepareDemoFixtures(
 	pool: Pool,
 	runId: string,
 	orders: readonly { orderId: string; quantity: number }[],
+	options?: FixtureOptions,
 ): Promise<void> {
+	const deadline = fixtureDeadline(options);
 	validateRunId(runId);
 	const unique = new Map<string, number>();
 	for (const { orderId, quantity } of orders) {
@@ -105,35 +171,55 @@ export async function prepareDemoFixtures(
 		}
 		unique.set(orderId, quantity);
 	}
-	await withTransaction(pool, async (client) => {
-		await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
-			runId.toLowerCase(),
-		]);
-		await deleteRun(client, runId);
-		for (const [orderId, quantity] of unique) {
+	await withTransaction(
+		pool,
+		async (client) => {
+			await setFixtureBudget(client, deadline);
 			await client.query(
-				"INSERT INTO orders(run_id,order_id,quantity) VALUES($1,$2,$3)",
-				[runId, orderId, quantity],
+				"SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+				[runId.toLowerCase()],
 			);
-		}
-		await client.query(
-			"INSERT INTO inventory(run_id,sku,quantity) VALUES($1,$2,$3)",
-			[runId, "sku_001", 10],
-		);
-	});
+			await deleteRun(client, runId, deadline);
+			for (const [orderId, quantity] of unique) {
+				await setFixtureBudget(client, deadline);
+				await client.query(
+					"INSERT INTO orders(run_id,order_id,quantity) VALUES($1,$2,$3)",
+					[runId, orderId, quantity],
+				);
+			}
+			await setFixtureBudget(client, deadline);
+			await client.query(
+				"INSERT INTO inventory(run_id,sku,quantity) VALUES($1,$2,$3)",
+				[runId, "sku_001", 10],
+			);
+			await setFixtureBudget(client, deadline);
+		},
+		deadline === undefined ? undefined : { deadline },
+	);
 }
 
 export async function cleanupDemoFixtures(
 	pool: Pool,
 	runId: string,
+	options?: FixtureOptions,
 ): Promise<void> {
+	const deadline = fixtureDeadline(options);
 	validateRunId(runId);
-	await withTransaction(pool, async (client) => {
-		await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
-			runId.toLowerCase(),
-		]);
-		await deleteRun(client, runId);
-	});
+	await withTransaction(
+		pool,
+		async (client) => {
+			await setFixtureBudget(client, deadline);
+			await client.query(
+				"SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+				[runId.toLowerCase()],
+			);
+			await deleteRun(client, runId, deadline);
+			await setFixtureBudget(client, deadline);
+		},
+		deadline === undefined ? undefined : { deadline },
+	);
 }
 
 export { runMigrations } from "./migrations.js";
+export * from "./scenarios.js";
+export * from "./runs.js";

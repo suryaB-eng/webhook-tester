@@ -2,55 +2,62 @@
 
 ## Current boundaries
 
-`apps/web` serves the React shell on port 4173. It proxies browser requests
-from `/api/health` to Fastify `apps/api` on port 4000. The API exposes only
-`GET /health`; it has no scenario storage or run launch endpoint.
+`apps/web` on port 4173 lists saved scenarios and launches either payment
+profile. Its run view polls a persisted run ID and shows selectable delivery
+details and scalar assertion results. Hash navigation preserves that ID across
+refresh. Vite proxies browser `/api` requests to Fastify on port 4000.
 
-`packages/contracts` validates `ScenarioV1` structure, IDs, event references,
-scalar assertion expectations, and size/limit bounds. Steps accept sequential
-mode only. Demo validation additionally permits only `demo-flawed` and
-`demo-corrected` payment targets, consistent quantities per order, and identical
-payloads for repeated logical business-event IDs. It derives one fixture order
-per referenced order ID; it does not promise arbitrary targets.
+`apps/api` exposes health, public targets, saved scenarios, enqueue, and run
+readback. Mutations require configured local Origin and JSON. Enqueue validates
+the scenario with the existing shared contracts, applies the selected demo
+target, and atomically saves a full scenario snapshot, a sanitized `{id,name}`
+target snapshot, planned evidence rows, and a queued job. The API sends no
+webhooks. Server configuration resolves endpoints.
 
-`apps/demo-target` on port 4010 exposes two payment webhook profiles and a
-database-backed health check. Both POST routes require a UUID in
-`X-Webhook-Lab-Run-Id` and matching run-scoped fixtures. Invalid requests return
-400, oversized bodies 413, and missing/inconsistent fixtures or failed effects 409.
+`packages/db` splits saved-scenario and run persistence responsibilities.
+The application database holds scenarios, runs, jobs, deliveries, and assertions.
+Seeds insert only missing One payment and Sequential duplicate payment presets.
+The runtime login can use these tables but cannot create schema objects, alter
+saved run snapshots, or access target tables.
 
-The flawed profile applies each delivery. The corrected profile claims
-`(run_id, business_event_id)`, guards the unpaid-to-paid transition, decrements
-available inventory, and inserts a fulfillment in one PostgreSQL transaction.
-An effect failure rolls back the claim and paid transition too. Transport IDs
-are irrelevant to deduplication.
+`apps/worker` holds a dedicated PostgreSQL session advisory lock for one run.
+It marks abandoned running jobs interrupted, atomically claims a queued job,
+and commits before network I/O. Ownership probes precede dispatch and follow
+HTTP work. Each step's delay begins after the preceding step completes.
+Request timeouts start at dispatch; an overall deadline bounds execution.
+Saving observations and final cleanup use separate bounded database budgets.
+Responses are capped at 16 KiB and redirects are not followed. Delivery IDs
+remain distinct from logical payment IDs.
 
-## Database setup
+The worker derives supported order fixtures using `demoOrders`. Assertions
+bind `$1` to run ID and use a separate SELECT-only login inside
+`BEGIN READ ONLY` with a statement timeout of at most 2000 ms. Results must
+have one row and one column named `value`, containing a JSON scalar.
+Comparison is strict, including number versus string.
 
-`packages/db` contains connection, transaction, migration, and reusable fixture
-helpers. PostgreSQL hosts `webhook_tester` and `demo_target`. The application
-login currently has CONNECT only because no application tables are needed yet.
-Target tables are `orders`, `inventory`, `fulfillments`, and
-`processed_business_events`, each scoped by run ID.
+Delivery and assertion observations are saved before normal fixture cleanup.
+Non-2xx responses or false assertions yield failed; setup, query, transport,
+timeout, or cleanup failures yield error. Lost ownership yields interrupted.
+Uncertain in-flight HTTP work and failed observation writes keep run-scoped
+fixtures; aborting a request does not prove target processing stopped.
+New owners never replay
+abandoned jobs.
 
-The target application login can read fixtures, update only payment-state and
-inventory columns, and insert effects/claims. The fixture login can prepare and
-delete run-scoped rows. The assertion login can SELECT only, with a read-only
-session default and statement timeout. Database owners and the migration
-administrator are separate from the target runtime login.
+`apps/demo-target` on port 4010 retains its two synchronous payment profiles
+and database-backed health endpoint. Both require matching run-scoped fixtures.
+Without deduplication applies every delivery; With deduplication claims
+`(run_id,business_event_id)` and commits payment state, inventory, and fulfillment
+together. The target application, fixture, and assertion logins have distinct
+permissions in `demo_target`.
 
-Fixture preparation creates one order per supplied order ID and `sku_001`
-stock 10. Setup and cleanup share their deletion helper and use transactions;
-cleanup deletes only the specified run. There are no worker-owned fixture lists.
+Compose applies tracked migrations before dependent services start.
+Published ports bind to host loopback. Tests use a separate disposable
+PostgreSQL instance on port 55433 and verify its marker before mutations.
+The Compose worker is stopped while test-owned workers run.
 
-Compose applies tracked migrations before dependent services start. Migrations
-upgrade existing local volumes and serialize execution with an advisory lock;
-applied-file checksums detect modified migration history. All published ports
-bind to host loopback. Tests use a separate disposable PostgreSQL instance
-on port 55433 and require its dedicated test database marker before mutations.
+## Intended behavior
 
-## Intended separation
-
-A future worker is intended to consume validated scenarios, derive demo fixtures,
-and deliver webhooks outside API request handlers. Scenario persistence belongs
-in the application database. The worker, execution queue, assertion execution,
-editor, status events, streaming, and comparison are not implemented.
+Stronger recovery can build on the current ownership, claim, dispatch, evidence,
+and cleanup boundaries. An editor, concurrent delivery, additional status
+profiles, live events, streaming, full history, rerun, and comparison are not
+implemented.

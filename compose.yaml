@@ -35,6 +35,8 @@ services:
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 4000
+      LOCAL_ORIGIN: ${LOCAL_ORIGIN:-http://127.0.0.1:4173}
+      APP_DATABASE_URL: postgresql://webhook_tester_app:app_local_only@postgres:5432/webhook_tester
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -65,6 +67,23 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+
+  worker:
+    build: .
+    command: ["node", "apps/worker/dist/main.js"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 65s
+    environment:
+      APP_DATABASE_URL: postgresql://webhook_tester_app:app_local_only@postgres:5432/webhook_tester
+      TARGET_FIXTURE_DATABASE_URL: postgresql://demo_target_fixture:fixture_local_only@postgres:5432/demo_target
+      TARGET_QUERY_DATABASE_URL: postgresql://demo_target_query:query_local_only@postgres:5432/demo_target
+      DEMO_TARGET_BASE_URL: http://demo-target:4010
+    depends_on:
+      api:
+        condition: service_healthy
+      demo-target:
+        condition: service_healthy
 
   web:
     build: .
