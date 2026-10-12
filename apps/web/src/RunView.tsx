@@ -1,6 +1,6 @@
-import type { JsonScalar, RunResponse } from "@webhook-tester/contracts";
-import { useEffect, useState } from "react";
-import { watchRun } from "./api";
+import type { JsonScalar, RunEvent } from "@webhook-tester/contracts";
+import { useState } from "react";
+import { useRunStream } from "./useRunStream";
 
 function time(value: string | null) {
 	return value ? new Date(value).toLocaleString() : "—";
@@ -9,32 +9,62 @@ function scalar(value: JsonScalar) {
 	return JSON.stringify(value);
 }
 
-export function RunView({ runId }: { runId: string }) {
-	const [run, setRun] = useState<RunResponse | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [attempt, setAttempt] = useState(0);
-	const [selectedId, setSelectedId] = useState<string | null>(null);
+const eventLabels: Record<RunEvent["type"], string> = {
+	"run.queued": "Run queued",
+	"run.started": "Run started",
+	"run.phase": "Phase changed",
+	"run.completed": "Run completed",
+	"delivery.scheduled": "Delivery scheduled",
+	"delivery.started": "Delivery started",
+	"delivery.completed": "Delivery completed",
+	"delivery.interrupted": "Delivery interrupted",
+	"assertion.completed": "Assertion completed",
+};
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: A retry resumes polling the same persisted run.
-	useEffect(() => {
-		const controller = new AbortController();
-		setRun(null);
-		setError(null);
-		setSelectedId(null);
-		void (async () => {
-			try {
-				for await (const saved of watchRun(runId, controller.signal)) {
-					if (!controller.signal.aborted) setRun(saved);
-				}
-			} catch (reason) {
-				if (!controller.signal.aborted)
-					setError(
-						reason instanceof Error ? reason.message : "Unable to load run.",
-					);
-			}
-		})();
-		return () => controller.abort();
-	}, [runId, attempt]);
+export function RunTimeline({ events, onSelectDelivery }: { events: RunEvent[]; onSelectDelivery?: (deliveryId: string) => void }) {
+	return (
+		<section className="panel" aria-labelledby="timeline-title">
+			<h2 id="timeline-title">Activity</h2>
+			<p className="section-help">Saved run activity in the order it was recorded.</p>
+			{events.length === 0 ? <p className="section-help">No activity recorded yet.</p> : (
+				<ol className="run-timeline">
+					{events.map((event) => {
+						const payload = event.payload;
+						const deliveryId = payload.deliveryId;
+						return (
+							<li key={event.cursor}>
+								<div className="timeline-heading">
+									<strong>{eventLabels[event.type]}</strong>
+									<time dateTime={event.createdAt}>{time(event.createdAt)}</time>
+								</div>
+								<div className="timeline-detail">
+									{deliveryId && (onSelectDelivery ? (
+										<button type="button" className="delivery-select mono" onClick={() => onSelectDelivery(deliveryId)}>{deliveryId}</button>
+									) : <span className="mono">{deliveryId}</span>)}
+									{payload.phase && <span>{payload.phase}</span>}
+									{payload.status && <span>{payload.status}</span>}
+									{payload.outcome && <span>{payload.outcome}</span>}
+									{payload.httpStatus != null && <span>HTTP {payload.httpStatus}</span>}
+									{payload.assertionName && <span>{payload.assertionName}</span>}
+									{payload.assertionStatus && <span>{payload.assertionStatus}</span>}
+								</div>
+								{event.type === "assertion.completed" && (
+									<p className="section-help mono">
+										Expected {JSON.stringify(payload.expected)}; {payload.assertionStatus === "error" ? "Actual not recorded" : `actual ${JSON.stringify(payload.actual)}`}
+									</p>
+								)}
+							</li>
+							);
+						})}
+					</ol>
+				)}
+		</section>
+	);
+}
+
+export function RunView({ runId }: { runId: string }) {
+	const { run, error, connection, refreshing, refresh } = useRunStream(runId);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
 
 	const selected =
 		run?.deliveries.find((delivery) => delivery.deliveryId === selectedId) ??
@@ -49,7 +79,8 @@ export function RunView({ runId }: { runId: string }) {
 					<p>{error}</p>
 					<button
 						type="button"
-						onClick={() => setAttempt((value) => value + 1)}
+						onClick={refresh}
+						disabled={refreshing}
 					>
 						Try again
 					</button>
@@ -70,6 +101,13 @@ export function RunView({ runId }: { runId: string }) {
 							{run.status}
 						</span>
 					</header>
+					<div className="run-live-controls">
+						<p role="status" aria-live="polite" className={`stream-state stream-state-${connection}`}>
+							{connection === "complete" ? "Saved run complete" : connection === "live" ? "Live updates connected" : connection === "reconnecting" ? "Reconnecting to live updates..." : "Connecting to live updates..."}
+							{refreshing && " Updating saved results..."}
+						</p>
+						<button type="button" onClick={refresh} disabled={refreshing}>Refresh results</button>
+					</div>
 					<section className="panel run-summary" aria-label="Run details">
 						<dl>
 							<div>
@@ -95,6 +133,7 @@ export function RunView({ runId }: { runId: string }) {
 						</dl>
 						{run.error && <p className="error-text">{run.error}</p>}
 					</section>
+					<RunTimeline events={run.events} onSelectDelivery={setSelectedId} />
 					<section className="panel" aria-labelledby="deliveries-title">
 						<h2 id="deliveries-title">Deliveries</h2>
 						<p className="section-help">

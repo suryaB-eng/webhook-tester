@@ -1,11 +1,12 @@
 import type {
 	PublicTarget,
+	RunEvent,
 	RunResponse,
-	RunStatus,
 	ScenarioSummary,
 	ScenarioV1,
 	SavedScenario,
 } from "@webhook-tester/contracts";
+import type { StreamCallbacks } from "./run-stream";
 
 export class ApiError extends Error {
 	constructor(
@@ -132,38 +133,48 @@ export async function launchRun(
 	return result.runId;
 }
 
-const terminal: ReadonlySet<RunStatus> = new Set([
-	"passed",
-	"failed",
-	"error",
-	"interrupted",
-]);
-export async function* watchRun(
+export function loadRun(
 	runId: string,
-	signal: AbortSignal,
-	intervalMs = 750,
+	signal?: AbortSignal,
 	base = "",
-): AsyncGenerator<RunResponse> {
-	while (!signal.aborted) {
-		const run = await request<RunResponse>(
-			`/api/runs/${encodeURIComponent(runId)}`,
-			signal,
-			base,
-		);
-		yield run;
-		if (terminal.has(run.status)) return;
-		await new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				signal.removeEventListener("abort", abort);
-				resolve();
-			}, intervalMs);
-			function abort() {
-				clearTimeout(timer);
-				reject(signal.reason);
-			}
-			signal.addEventListener("abort", abort, { once: true });
-			if (signal.aborted) abort();
-		});
-	}
-	signal.throwIfAborted();
+): Promise<RunResponse> {
+	return request(`/api/runs/${encodeURIComponent(runId)}`, signal, base);
+}
+
+type RunEventSource = {
+	onopen: ((event: Event) => unknown) | null;
+	onerror: ((event: Event) => unknown) | null;
+	onmessage: ((event: MessageEvent) => unknown) | null;
+	close(): void;
+};
+const eventTypes = new Set([
+	"run.queued", "run.started", "run.phase", "run.completed",
+	"delivery.scheduled", "delivery.started", "delivery.completed", "delivery.interrupted", "assertion.completed",
+]);
+export function subscribeRun(
+	runId: string,
+	after: string,
+	callbacks: StreamCallbacks,
+	base = "",
+	createSource: (url: string) => RunEventSource = (url) => new EventSource(url),
+): () => void {
+	const source = createSource(`${base}/api/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(after)}`);
+	source.onopen = () => callbacks.open();
+	source.onerror = () => callbacks.error();
+	source.onmessage = (message) => {
+		try {
+			const value: unknown = JSON.parse(message.data);
+			if (!value || typeof value !== "object" ||
+				!("cursor" in value) || typeof value.cursor !== "string" || !/^\d+$/.test(value.cursor) ||
+				!("runId" in value) || value.runId !== runId ||
+				!("type" in value) || typeof value.type !== "string" || !eventTypes.has(value.type) ||
+				!("payload" in value) || !value.payload || typeof value.payload !== "object" || Array.isArray(value.payload) ||
+				!("createdAt" in value) || typeof value.createdAt !== "string") return;
+			callbacks.event(value as RunEvent);
+		} catch {
+			callbacks.error();
+		}
+	};
+	// Keep one native EventSource so reconnects preserve Last-Event-ID.
+	return () => { source.onopen = null; source.onerror = null; source.onmessage = null; source.close(); };
 }

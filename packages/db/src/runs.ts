@@ -13,6 +13,7 @@ import {
 } from "@webhook-tester/contracts";
 import type { Pool, PoolClient } from "pg";
 import { withTransaction } from "./index.js";
+import { appendRunEvent, readRunEvents } from "./events.js";
 
 export class ScenarioNotFoundError extends Error {}
 
@@ -90,6 +91,7 @@ export async function enqueueRun(
 			id,
 		]);
 		await insertEvidence(client, id, scenario);
+		await appendRunEvent(client, id, "run.queued", { status: "queued", phase: "queued" });
 		return id;
 	});
 }
@@ -138,6 +140,9 @@ export async function getRun(
 ): Promise<RunResponse | null> {
 	// One database snapshot keeps a polling response consistent while the worker writes results.
 	const client = await pool.connect();
+	let discard = false;
+	const markBroken = () => { discard = true; };
+	client.on("error", markBroken);
 	try {
 		await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
 		const result = await client.query<RunRow>(
@@ -157,6 +162,7 @@ export async function getRun(
 			"SELECT * FROM assertions WHERE run_id=$1 ORDER BY ordinal",
 			[id],
 		);
+		const events = await readRunEvents(client, id);
 		await client.query("COMMIT");
 		return {
 			id: run.id,
@@ -171,6 +177,8 @@ export async function getRun(
 			startedAt: iso(run.started_at),
 			completedAt: iso(run.completed_at),
 			error: run.error,
+			events,
+			eventCursor: events.at(-1)?.cursor ?? "0",
 			deliveries: deliveries.rows.map((delivery) => ({
 				deliveryId: delivery.delivery_id,
 				stepId: delivery.step_id,
@@ -198,9 +206,13 @@ export async function getRun(
 			})),
 		};
 	} catch (error) {
-		await client.query("ROLLBACK");
+		if (!discard) {
+			try { await client.query("ROLLBACK"); } catch { discard = true; }
+		}
 		throw error;
 	} finally {
-		client.release();
+		client.release(discard);
+		if (discard) client.once("end", () => client.off("error", markBroken));
+		else client.off("error", markBroken);
 	}
 }

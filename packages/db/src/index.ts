@@ -223,3 +223,4 @@ export async function cleanupDemoFixtures(
 export { runMigrations } from "./migrations.js";
 export * from "./scenarios.js";
 export * from "./runs.js";
+export * from "./events.js";

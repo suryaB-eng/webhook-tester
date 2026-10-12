@@ -6,6 +6,7 @@ import {
 import type { Pool } from "pg";
 import Fastify from "fastify";
 import { registerRunRoutes } from "./runs.js";
+import { registerRunEventRoutes, type EventStreamOptions } from "./events.js";
 import { registerScenarioRoutes } from "./scenarios.js";
 
 export interface ApiOptions {
@@ -13,6 +14,7 @@ export interface ApiOptions {
 	targets?: ReadonlyMap<string, PublicTarget>;
 	allowedOrigin?: string;
 	logger?: boolean;
+	eventStream?: EventStreamOptions;
 }
 export const defaultTargets: ReadonlyMap<string, PublicTarget> = new Map([
 	["demo-flawed", { id: "demo-flawed", name: "Without deduplication" }],
@@ -37,6 +39,7 @@ export function buildApp(options: ApiOptions = {}) {
 		const allowedOrigin = options.allowedOrigin ?? "http://127.0.0.1:4173";
 		registerScenarioRoutes(app, options.appPool, targets, allowedOrigin);
 		registerRunRoutes(app, options.appPool, targets, allowedOrigin);
+		registerRunEventRoutes(app, options.appPool, options.eventStream);
 	}
 	app.setErrorHandler((error, request, reply) => {
 		if (error instanceof ScenarioRevisionConflictError)

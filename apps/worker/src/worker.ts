@@ -31,8 +31,12 @@ export async function runWorkerOnce(
 	let owns = false;
 	let lost = false;
 	let released = false;
+	const stopDeliveries = new AbortController();
 	const onError = () => {
 		lost = true;
+		stopDeliveries.abort(
+			new OwnershipLost("Worker ownership lost; run was not replayed"),
+		);
 	};
 	session.on("error", onError);
 	try {
@@ -74,6 +78,9 @@ export async function runWorkerOnce(
 				)
 					throw new RunTimeout("Overall run timeout during ownership probe");
 				lost = true;
+				stopDeliveries.abort(
+					new OwnershipLost("Worker ownership lost; run was not replayed"),
+				);
 				throw new OwnershipLost("Worker ownership lost; run was not replayed");
 			}
 		}
@@ -132,7 +139,6 @@ export async function runWorkerOnce(
 			const events = new Map(
 				scenario.events.map((event) => [event.id, event.payload]),
 			);
-			const stopDeliveries = new AbortController();
 			const planSignal = AbortSignal.any([runSignal, stopDeliveries.signal]);
 			try {
 				await executeDeliveryPlan({
@@ -144,14 +150,17 @@ export async function runWorkerOnce(
 					},
 					now: () => new Date(),
 					onScheduled: async (_step, delivery, scheduledAt) => {
-						await owned(() =>
-							repository.schedule(
+						await owned(async () => {
+							planSignal.throwIfAborted();
+							await probe();
+							checkDeadline();
+							await repository.schedule(
 								execution,
 								run.id,
 								delivery.deliveryId,
 								scheduledAt,
-							),
-						);
+							);
+						});
 					},
 					dispatch: async (_step, delivery) => {
 						try {
@@ -171,6 +180,7 @@ export async function runWorkerOnce(
 								checkDeadline();
 								planSignal.throwIfAborted();
 							});
+							planSignal.throwIfAborted();
 							// A peer failure stops new dispatches without abandoning started responses.
 							const result = await deliverWebhook({
 								profile: target,
@@ -253,6 +263,11 @@ export async function runWorkerOnce(
 			try {
 				await probe();
 				await repository.phase(observations, run.id, "cleanup");
+				await probe();
+				if (lost)
+					throw new OwnershipLost(
+						"Worker ownership lost before fixture cleanup",
+					);
 				await cleanupDemoFixtures(options.fixturePool, run.id, {
 					timeoutMs: 2000,
 				});
@@ -275,7 +290,6 @@ export async function runWorkerOnce(
 				caught instanceof Error ? caught.message : "Worker ownership lost";
 		}
 		if (status === "interrupted") {
-			session.removeListener("error", onError);
 			session.release(true);
 			released = true;
 			await repository.finishInterrupted(
@@ -285,13 +299,31 @@ export async function runWorkerOnce(
 				error,
 			);
 		} else {
-			await repository.finishOwned(
-				observations,
-				run.id,
-				options.workerId,
-				status,
-				error,
-			);
+			try {
+				await repository.finishOwned(
+					observations,
+					run.id,
+					options.workerId,
+					status,
+					error,
+				);
+			} catch (caught) {
+				// A disconnect can occur between the last probe and the terminal transaction.
+				try {
+					await probe();
+				} catch {
+					/* probe records lost ownership */
+				}
+				if (!lost) throw caught;
+				session.release(true);
+				released = true;
+				await repository.finishInterrupted(
+					options.appPool,
+					run.id,
+					options.workerId,
+					"Worker ownership lost during finalization; run was not replayed",
+				);
+			}
 		}
 		return "processed";
 	} catch (caught) {
@@ -307,8 +339,10 @@ export async function runWorkerOnce(
 		} catch {
 			lost = true;
 		} finally {
-			session.removeListener("error", onError);
 			if (!released) session.release(lost);
+			// Healthy clients now have the pool's idle error handler. Discarded clients keep
+			// this listener through asynchronous close/error events until pg disposes them.
+			if (!lost && !released) session.removeListener("error", onError);
 		}
 	}
 }

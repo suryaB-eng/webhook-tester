@@ -898,7 +898,7 @@ test("sequential worker persists real HTTP and PostgreSQL run results", {
 				let waiting = false;
 				while (Date.now() < deadline) {
 					const blocked = await adminPool.query<{ waiting: boolean }>(
-						"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND usename='webhook_tester_app' AND wait_event_type='Lock' AND query LIKE '%UPDATE runs SET status%') AS waiting",
+						"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND usename='webhook_tester_app' AND wait_event_type='Lock' AND query LIKE '%runs%') AS waiting",
 					);
 					if (blocked.rows[0]?.waiting) {
 						waiting = true;

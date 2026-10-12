@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { launchRun, loadScenarios, loadTargets, watchRun } from "./api.js";
+import { launchRun, loadScenarios, loadTargets } from "./api.js";
 import * as api from "./api.js";
 
 test("scenario CRUD uses JSON requests and preserves revision conflict details", async (t) => {
@@ -145,7 +145,8 @@ test("scenario CRUD uses JSON requests and preserves revision conflict details",
 	);
 });
 
-test("scenario launch sends JSON and polls saved results until completion", async (t) => {
+test("scenario launch sends JSON and saved run reads support refresh and HTTP errors", async (t) => {
+	assert.equal(typeof api.loadRun, "function", "saved run snapshots can be loaded independently of the stream");
 	let reads = 0;
 	const requests: {
 		method: string | undefined;
@@ -211,8 +212,7 @@ test("scenario launch sends JSON and polls saved results until completion", asyn
 	const id = await launchRun("duplicate", "demo-corrected", undefined, base);
 	assert.equal(id, "saved-run");
 	const statuses = [];
-	for await (const run of watchRun(id, new AbortController().signal, 1, base))
-		statuses.push(run.status);
+	for (let read = 0; read < 3; read++) statuses.push((await api.loadRun(id, undefined, base)).status);
 	assert.deepEqual(statuses, ["queued", "running", "passed"]);
 	assert.equal(reads, 3);
 	assert.deepEqual(
@@ -227,23 +227,38 @@ test("scenario launch sends JSON and polls saved results until completion", asyn
 			}),
 		},
 	);
-	const refreshed = [];
-	for await (const run of watchRun(id, new AbortController().signal, 1, base))
-		refreshed.push(run.id);
-	assert.deepEqual(refreshed, ["saved-run"]);
-	await assert.rejects(async () => {
-		for await (const _run of watchRun(
-			"missing",
-			new AbortController().signal,
-			1,
-			base,
-		)) {
-			/* consume */
-		}
-	}, /Run not found/);
-	await assert.rejects(async () => {
-		for await (const _run of watchRun(id, AbortSignal.abort(), 1, base)) {
-			/* consume */
-		}
-	});
+	assert.equal((await api.loadRun(id, undefined, base)).id, "saved-run");
+	await assert.rejects(api.loadRun("missing", undefined, base), /Run not found/);
+	await assert.rejects(api.loadRun(id, AbortSignal.abort(), base));
+});
+
+test("run SSE uses the saved decimal cursor and delivers only valid events for this run", () => {
+	assert.equal(typeof api.subscribeRun, "function", "run events are subscribed through native EventSource");
+	let url = "";
+	let closed = false;
+	const source = {
+		onopen: null as ((event: Event) => unknown) | null,
+		onerror: null as ((event: Event) => unknown) | null,
+		onmessage: null as ((event: MessageEvent) => unknown) | null,
+		close() { closed = true; },
+	};
+	const events: string[] = [];
+	let opens = 0;
+	let errors = 0;
+	const unsubscribe = api.subscribeRun("run/id", "9007199254740993", {
+		event: (event) => events.push(event.cursor), open: () => { opens++; }, error: () => { errors++; },
+	}, "", (value) => { url = value; return source; });
+	assert.equal(url, "/api/runs/run%2Fid/events?after=9007199254740993");
+	source.onopen?.(new Event("open"));
+	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: "9007199254740994", runId: "run/id", type: "run.phase", payload: { phase: "asserting" }, createdAt: "2026-10-12T12:00:00.000Z" }) }));
+	source.onmessage?.(new MessageEvent("message", { data: "invalid json" }));
+	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: 4, runId: "run/id", type: "run.phase" }) }));
+	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: "5", runId: "other", type: "run.phase", payload: {}, createdAt: "2026-10-12T12:00:00.000Z" }) }));
+	source.onerror?.(new Event("error"));
+	assert.deepEqual(events, ["9007199254740994"]);
+	assert.equal(opens, 1);
+	assert.ok(errors >= 1);
+	assert.equal(closed, false, "native reconnect must retain this EventSource and its Last-Event-ID");
+	unsubscribe();
+	assert.equal(closed, true);
 });

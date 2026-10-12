@@ -7,11 +7,15 @@ Its editor keeps drafts local, including incomplete JSON and numeric input.
 Shared contracts validate supported payment/status documents for editing,
 import/export, API saves, and enqueue. Exports contain only the scenario and an
 allowlisted target ID. Imports are limited to 1 MiB of UTF-8 before parsing.
-Revision conflicts preserve the unsaved draft. The run view polls saved results;
-hash navigation keeps the run ID across refresh. Vite proxies `/api` to Fastify.
+Revision conflicts preserve the unsaved draft. The run view loads a coherent saved
+snapshot, then replays database events through SSE. Cursors deduplicate reconnects;
+events invalidate the snapshot rather than replace saved results. Hash navigation
+keeps the run ID across refresh. Browser closure only disconnects the stream.
+Vite proxies `/api` to Fastify.
 
 `apps/api` on port 4000 exposes health, public targets, scenario creation,
-readback, revision-checked updates, duplication, enqueue, and run readback.
+readback, revision-checked updates, duplication, enqueue, run readback, and
+JSON/SSE event replay.
 Mutations require configured local Origin and JSON. Endpoints stay in server
 configuration. Enqueue locks the saved scenario, resolves the selected or default
 profile from that snapshot, and stores the validated document, sanitized
@@ -19,18 +23,28 @@ profile from that snapshot, and stores the validated document, sanitized
 webhooks.
 
 `packages/db` separates scenario and run persistence. The application database
-holds scenarios, runs, jobs, deliveries, and assertions. Scenario updates lock
-the row, compare its integer revision atomically, and increment it. Stale saves
-return 409 with the current revision. Duplicates have independent IDs; source
+holds scenarios, runs, jobs, deliveries, assertions, and run events. Scenario
+updates lock the row, compare its integer revision atomically, and increment it.
+Stale saves return 409 with the current revision. Duplicates have independent IDs; source
 edits never change existing run snapshots. Seeds insert only missing presets.
 The application login cannot create schema objects, alter saved run snapshots,
-or access target tables. A forward migration adds revisions to existing rows.
+or access target tables. Result transitions and their allowlisted event payloads
+commit together. A run row lock orders event insertion and commit for that run;
+bigint cursors travel as decimal strings. Snapshot results, events, and cursor
+come from one repeatable-read transaction. Replay resumes after the greater of
+`after` and a valid `Last-Event-ID`; idle comments keep SSE alive, and disconnect
+stops polling. Events contain identifiers, outcomes, and scalar assertion values,
+without request bodies, response excerpts, SQL, endpoints, or credentials.
 
 `apps/worker` owns one run through a dedicated PostgreSQL session advisory lock.
 It marks abandoned running jobs interrupted, claims a queued job atomically,
-and commits before HTTP work. Ownership probes precede dispatch and follow
-HTTP work. `packages/runner` processes steps in order, delays after previous
-completion, and bounds concurrent requests within that run. Abort/error stops
+and commits before HTTP work. Ownership probes use that same session at
+scheduling and dispatch boundaries and after HTTP work. Session errors stop
+new deliveries without crashing the process.
+Conditional writes preserve terminal states; a successor interrupts abandoned
+work, and an old worker cannot overwrite its interruption with a late response.
+`packages/runner` processes steps in order, delays after previous completion,
+and bounds concurrent requests within that run. Abort/error stops
 new dispatches and awaits started promises. Request timeouts begin at dispatch;
 an overall deadline bounds execution. Responses are capped at 16 KiB, redirects
 are disabled, and transport IDs remain distinct from business-event IDs.
@@ -58,6 +72,4 @@ and stop the Compose worker while test-owned workers run.
 
 ## Intended behavior
 
-Stronger recovery and live updates can build on the current ownership, dispatch,
-evidence, and cleanup boundaries. Streaming, full history, rerun, and comparison
-are intended and are not implemented.
+Saved run history, rerun, and comparison are intended and are not implemented.

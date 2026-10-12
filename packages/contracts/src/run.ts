@@ -48,6 +48,36 @@ export interface AssertionResult {
 	status: "pending" | "passed" | "failed" | "error";
 	error: string | null;
 }
+export type RunEventType =
+	| "run.queued"
+	| "run.started"
+	| "run.phase"
+	| "run.completed"
+	| "delivery.scheduled"
+	| "delivery.started"
+	| "delivery.completed"
+	| "delivery.interrupted"
+	| "assertion.completed";
+export interface RunEventPayload {
+	status?: RunStatus;
+	phase?: string;
+	deliveryId?: string;
+	outcome?: DeliveryResult["outcome"];
+	httpStatus?: number | null;
+	assertionId?: string;
+	assertionName?: string;
+	expected?: JsonScalar;
+	actual?: JsonScalar | null;
+	assertionStatus?: AssertionResult["status"];
+}
+export interface RunEvent {
+	/** Canonical nonnegative decimal bigint; zero is the replay sentinel. */
+	cursor: string;
+	runId: string;
+	type: RunEventType;
+	payload: RunEventPayload;
+	createdAt: string;
+}
 export interface RunResponse {
 	id: string;
 	status: RunStatus;
@@ -60,4 +90,6 @@ export interface RunResponse {
 	error: string | null;
 	deliveries: DeliveryResult[];
 	assertions: AssertionResult[];
+	eventCursor: string;
+	events: RunEvent[];
 }

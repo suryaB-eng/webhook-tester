@@ -15,8 +15,8 @@ Invoke-RestMethod http://127.0.0.1:4000/health
 ```
 
 Open http://127.0.0.1:4173. Choose a scenario and either
-**Without deduplication** or **With deduplication**. The run page reads saved
-results and survives refresh. Select a delivery to inspect its payload, response,
+**Without deduplication** or **With deduplication**. The run page streams saved
+progress and survives refresh. Select a delivery to inspect its payload, response,
 and timings. Create or edit a scenario, duplicate a saved scenario, or import/export
 its JSON document. Drafts stay local until Save; a revision conflict preserves
 the draft instead of replacing the newer saved scenario.
@@ -41,7 +41,7 @@ database passwords. Stop services with `docker compose down`.
 - A separate worker with PostgreSQL ownership, sequential and bounded concurrent
   delivery, bounded responses, timeouts, and SELECT-only scalar assertions.
 - Saved request/response details, timestamps, assertion expectations/results,
-  and run status, shown through real API polling.
+  and run status, with a saved event timeline and live updates.
 - Run-scoped fixtures, transactional payment handling, and version-guarded status
   updates. Corrected handling deduplicates payments and ignores stale/equal versions.
 
@@ -54,11 +54,12 @@ on the corrected profile.
 Normal completion saves results before removing that run's fixtures.
 Transport timeouts, ownership loss, and failed result writes retain run-scoped
 fixtures so uncertain work and unsaved observations remain inspectable.
-Abandoned runs become interrupted and are never automatically replayed. Cleanup failure is an error.
+Abandoned runs become interrupted and are never automatically replayed. Late
+responses cannot change a terminal run. Cleanup failure is an error.
 
 **Next up**
 
-- Stronger recovery and live run updates.
+- Saved run history, rerun, and comparison.
 
 These are intended and are not implemented.
 
@@ -98,6 +99,15 @@ docker compose -f compose.test.yaml down
 docker compose start worker
 ```
 
+For a live run check, launch Sequential duplicate payment with With deduplication.
+Refresh the run URL and verify the same deliveries, assertions, and timeline.
+Temporarily disconnect the browser, then reconnect; saved events should appear
+without duplicates. To simulate a worker crash, use a disposable scenario with a
+5000 ms first-step delay: while running, execute `docker compose kill -s SIGKILL worker`,
+then `docker compose up -d worker`. The saved run should become interrupted without
+another delivery attempt. A graceful stop can finish its current run. Browser closure
+does not cancel a run.
+
 For an editor check, duplicate One payment, edit its name, save, export JSON,
 and import it into a new local draft. Save the imported draft and run it with
 With deduplication. Open one saved scenario in two tabs at the same revision;
@@ -127,7 +137,7 @@ The same GET URL always reads that saved run; it does not launch another run.
 See [architecture](docs/architecture.md) for service boundaries.
 
 Dependency/configuration choices, validation, transaction, enqueue/snapshot,
-scalar assertion, delivery scheduling, editor validation, and bounded response patterns were adapted
+scalar assertion, delivery scheduling, editor validation, saved event streaming, and bounded response patterns were adapted
 from relevant modules of `suryaB-eng/webhook-lab` at
 `e6a761182bd338f68dd439e260bb25b3d91bb44c`. Its Git history was not imported.
 The reference MIT notice is preserved in [LICENSE](LICENSE).
