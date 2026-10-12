@@ -6,6 +6,7 @@ import {
 	validateDemoScenario,
 } from "@webhook-tester/contracts";
 import { cleanupDemoFixtures, prepareDemoFixtures } from "@webhook-tester/db";
+import { executeDeliveryPlan } from "@webhook-tester/runner";
 import type { Pool } from "pg";
 import { executeAssertion } from "./assertions.js";
 import * as repository from "./repository.js";
@@ -81,7 +82,17 @@ export async function runWorkerOnce(
 		let error: string | null = null;
 		let prepared = false;
 		let uncertain = false;
-		let observationPending = false;
+		let pendingObservations = 0;
+		// Serialize complete operations on the owning session, including timeout settings.
+		let sessionWork: Promise<unknown> = Promise.resolve();
+		function owned<T>(operation: () => Promise<T>): Promise<T> {
+			const pending = sessionWork.then(operation);
+			sessionWork = pending.then(
+				() => undefined,
+				() => undefined,
+			);
+			return pending;
+		}
 		const started = performance.now();
 		let deadline = started;
 		const execution = budgetSession(session, () => deadline);
@@ -121,59 +132,83 @@ export async function runWorkerOnce(
 			const events = new Map(
 				scenario.events.map((event) => [event.id, event.payload]),
 			);
-			for (const step of scenario.steps) {
-				// Each delay starts after the preceding step has completed, not at run start.
-				const scheduledAt = new Date(Date.now() + step.delayBeforeMs);
-				for (const delivery of step.deliveries)
-					await repository.schedule(
-						execution,
-						run.id,
-						delivery.deliveryId,
-						scheduledAt,
-					);
-				try {
-					await delay(
-						Math.max(0, scheduledAt.getTime() - Date.now()),
-						undefined,
-						{ signal: runSignal },
-					);
-				} catch {
-					throw new RunTimeout("Overall run timeout during step delay");
-				}
-				for (const delivery of step.deliveries) {
-					await probe();
-					checkDeadline();
-					const payload = events.get(delivery.eventId);
-					if (!payload) throw new Error("Validated event reference is missing");
-					await repository.startDelivery(
-						execution,
-						run.id,
-						delivery.deliveryId,
-					);
-					await probe();
-					checkDeadline();
-					const result = await deliverWebhook({
-						profile: target,
-						runId: run.id,
-						deliveryId: delivery.deliveryId,
-						payload,
-						requestTimeoutMs: scenario.limits.requestTimeoutMs,
-						runSignal,
-					});
-					uncertain ||= result.uncertain;
-					observationPending = true;
-					await probe();
-					await repository.completeDelivery(
-						observations,
-						run.id,
-						delivery.deliveryId,
-						result,
-					);
-					observationPending = false;
-					if (result.outcome === "error")
-						throw new Error(result.error ?? "Webhook delivery error");
-					if (result.outcome === "failed") status = "failed";
-				}
+			const stopDeliveries = new AbortController();
+			const planSignal = AbortSignal.any([runSignal, stopDeliveries.signal]);
+			try {
+				await executeDeliveryPlan({
+					steps: scenario.steps,
+					maxConcurrency: scenario.limits.maxConcurrency,
+					signal: planSignal,
+					delay: async (milliseconds, signal) => {
+						await delay(milliseconds, undefined, { signal });
+					},
+					now: () => new Date(),
+					onScheduled: async (_step, delivery, scheduledAt) => {
+						await owned(() =>
+							repository.schedule(
+								execution,
+								run.id,
+								delivery.deliveryId,
+								scheduledAt,
+							),
+						);
+					},
+					dispatch: async (_step, delivery) => {
+						try {
+							const payload = events.get(delivery.eventId);
+							if (!payload)
+								throw new Error("Validated event reference is missing");
+							await owned(async () => {
+								planSignal.throwIfAborted();
+								await probe();
+								checkDeadline();
+								await repository.startDelivery(
+									execution,
+									run.id,
+									delivery.deliveryId,
+								);
+								await probe();
+								checkDeadline();
+								planSignal.throwIfAborted();
+							});
+							// A peer failure stops new dispatches without abandoning started responses.
+							const result = await deliverWebhook({
+								profile: target,
+								runId: run.id,
+								deliveryId: delivery.deliveryId,
+								payload,
+								requestTimeoutMs: scenario.limits.requestTimeoutMs,
+								runSignal,
+							});
+							uncertain ||= result.uncertain;
+							pendingObservations++;
+							const deliveryError =
+								result.outcome === "error"
+									? new Error(result.error ?? "Webhook delivery error")
+									: null;
+							if (deliveryError) stopDeliveries.abort(deliveryError);
+							await owned(async () => {
+								await probe();
+								await repository.completeDelivery(
+									observations,
+									run.id,
+									delivery.deliveryId,
+									result,
+								);
+								pendingObservations--;
+							});
+							if (deliveryError) throw deliveryError;
+							if (result.outcome === "failed") status = "failed";
+						} catch (caught) {
+							stopDeliveries.abort(caught);
+							throw caught;
+						}
+					},
+				});
+			} catch (caught) {
+				if (runSignal.aborted && !(caught instanceof OwnershipLost))
+					throw new RunTimeout("Overall run timeout during delivery plan");
+				throw caught;
 			}
 			checkDeadline();
 			await repository.phase(execution, run.id, "assertions");
@@ -186,7 +221,7 @@ export async function runWorkerOnce(
 					assertion,
 					deadline - performance.now(),
 				);
-				observationPending = true;
+				pendingObservations++;
 				await probe();
 				await repository.completeAssertion(
 					observations,
@@ -194,7 +229,7 @@ export async function runWorkerOnce(
 					assertion.id,
 					result,
 				);
-				observationPending = false;
+				pendingObservations--;
 				if (result.status === "error") {
 					status = "error";
 					error ??= result.error;
@@ -209,7 +244,12 @@ export async function runWorkerOnce(
 		}
 
 		// Persist observations before cleanup. Retain uncertain HTTP work in its own run.
-		if (prepared && !uncertain && !observationPending && status !== "interrupted") {
+		if (
+			prepared &&
+			!uncertain &&
+			pendingObservations === 0 &&
+			status !== "interrupted"
+		) {
 			try {
 				await probe();
 				await repository.phase(observations, run.id, "cleanup");
@@ -224,12 +264,13 @@ export async function runWorkerOnce(
 					caught instanceof Error ? caught.message : "Fixture cleanup failed";
 			}
 		}
-		if ((uncertain || observationPending) && status !== "interrupted")
+		if ((uncertain || pendingObservations > 0) && status !== "interrupted")
 			error = `${error ?? "Uncertain target work"}; run-scoped fixtures retained`;
 		try {
 			await probe();
 		} catch (caught) {
-			status = caught instanceof OwnershipLost || lost ? "interrupted" : "error";
+			status =
+				caught instanceof OwnershipLost || lost ? "interrupted" : "error";
 			error =
 				caught instanceof Error ? caught.message : "Worker ownership lost";
 		}

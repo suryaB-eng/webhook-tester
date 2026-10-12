@@ -296,3 +296,289 @@ test("payment profiles preserve their run-scoped transactional behavior", async 
 		},
 	);
 });
+
+test("status profiles apply run-scoped arrival and version behavior", async (t) => {
+	const urls = testDatabaseUrls();
+	await assertTestDatabase(urls);
+	await runMigrations(urls);
+	const application = createPool(urls.targetApp);
+	const fixture = createPool(urls.targetFixture);
+	const query = createPool(urls.targetQuery);
+	const app = buildDemoTarget(application);
+	const runIds: string[] = [];
+	t.after(async () => {
+		try {
+			await app.close();
+			for (const runId of runIds) await cleanupDemoFixtures(fixture, runId);
+		} finally {
+			await Promise.all([application.end(), fixture.end(), query.end()]);
+		}
+	});
+	const base = await app.listen({ host: "127.0.0.1", port: 0 });
+	async function prepare() {
+		const runId = randomUUID();
+		runIds.push(runId);
+		await prepareDemoFixtures(fixture, runId, [
+			{ orderId: "order_001", quantity: 2 },
+			{ orderId: "other_order", quantity: 1 },
+		]);
+		return runId;
+	}
+	function event(status = "processing", version = 1, orderId = "order_001") {
+		return {
+			id: `status_${version}`,
+			type: "order.status_changed",
+			data: { orderId, status, version },
+		};
+	}
+	async function send(
+		profile: "flawed" | "corrected",
+		runId: string | undefined,
+		payload: unknown,
+	) {
+		return fetch(`${base}/webhooks/${profile}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(runId === undefined ? {} : { "x-webhook-lab-run-id": runId }),
+			},
+			body: JSON.stringify(payload),
+		});
+	}
+	async function state(runId: string, orderId = "order_001") {
+		const result = await query.query(
+			`SELECT status, version::text AS version, paid, quantity,
+        (SELECT quantity FROM inventory WHERE run_id = $1 AND sku = 'sku_001') AS stock,
+        (SELECT count(*)::int FROM fulfillments WHERE run_id = $1) AS fulfillments,
+        (SELECT count(*)::int FROM processed_business_events WHERE run_id = $1) AS claims
+        FROM orders WHERE run_id = $1 AND order_id = $2`,
+			[runId, orderId],
+		);
+		return result.rows[0];
+	}
+	for (const profile of ["flawed", "corrected"] as const) {
+		await t.test(`${profile}: status delivery is acknowledged`, async () => {
+			const runId = await prepare();
+			const response = await send(profile, runId, event());
+			assert.equal(response.status, 200);
+			assert.deepEqual(await response.json(), {
+				received: true,
+				businessEventId: "status_1",
+			});
+		});
+		await t.test(
+			`${profile}: arbitrary one-character statuses remain valid`,
+			async () => {
+				const runId = await prepare();
+				assert.equal((await send(profile, runId, event("v", 1))).status, 200);
+				assert.equal((await state(runId)).status, "v");
+			},
+		);
+		await t.test(
+			`${profile}: fixtures begin at created version zero and status does not cause payment effects`,
+			async () => {
+				const runId = await prepare();
+				assert.deepEqual(await state(runId), {
+					status: "created",
+					version: "0",
+					paid: false,
+					quantity: 2,
+					stock: 10,
+					fulfillments: 0,
+					claims: 0,
+				});
+				assert.equal(
+					(await send(profile, runId, event("packed", 3))).status,
+					200,
+				);
+				assert.deepEqual(await state(runId), {
+					status: "packed",
+					version: "3",
+					paid: false,
+					quantity: 2,
+					stock: 10,
+					fulfillments: 0,
+					claims: 0,
+				});
+				assert.deepEqual(await state(runId, "other_order"), {
+					status: "created",
+					version: "0",
+					paid: false,
+					quantity: 1,
+					stock: 10,
+					fulfillments: 0,
+					claims: 0,
+				});
+			},
+		);
+		await t.test(
+			`${profile}: stale and equal versions are accepted with the profile's mutation behavior`,
+			async () => {
+				const runId = await prepare();
+				assert.equal(
+					(await send(profile, runId, event("shipped", 3))).status,
+					200,
+				);
+				assert.equal(
+					(await send(profile, runId, event("processing", 1))).status,
+					200,
+				);
+				assert.equal(
+					(await state(runId)).status,
+					profile === "flawed" ? "processing" : "shipped",
+				);
+				assert.equal(
+					(await state(runId)).version,
+					profile === "flawed" ? "1" : "3",
+				);
+				assert.equal(
+					(
+						await send(
+							profile,
+							runId,
+							event("equal-version", profile === "flawed" ? 1 : 3),
+						)
+					).status,
+					200,
+				);
+				assert.equal(
+					(await state(runId)).status,
+					profile === "flawed" ? "equal-version" : "shipped",
+				);
+			},
+		);
+		await t.test(
+			`${profile}: updates and cleanup remain isolated between runs`,
+			async () => {
+				const first = await prepare();
+				const second = await prepare();
+				assert.equal(
+					(await send(profile, first, event("shipped", 3))).status,
+					200,
+				);
+				assert.deepEqual(await state(second), {
+					status: "created",
+					version: "0",
+					paid: false,
+					quantity: 2,
+					stock: 10,
+					fulfillments: 0,
+					claims: 0,
+				});
+				assert.equal(
+					(await send(profile, second, event("processing", 1))).status,
+					200,
+				);
+				await cleanupDemoFixtures(fixture, first);
+				assert.equal(await state(first), undefined);
+				assert.equal((await state(second)).status, "processing");
+				assert.equal((await state(second)).version, "1");
+			},
+		);
+		await t.test(
+			`${profile}: absent orders fail and malformed status inputs cannot mutate fixtures`,
+			async () => {
+				const runId = await prepare();
+				for (const payload of [
+					event("", 1),
+					event(" \t", 1),
+					event("x".repeat(101), 1),
+					event("processing", 0),
+					event("processing", 1.5),
+					event("processing", Number.MAX_SAFE_INTEGER + 1),
+					{ ...event(), extra: true },
+					{ ...event(), data: { ...event().data, quantity: 2 } },
+				]) {
+					assert.equal((await send(profile, runId, payload)).status, 400);
+				}
+				for (const invalidRunId of [undefined, "invalid"])
+					assert.equal(
+						(await send(profile, invalidRunId, event())).status,
+						400,
+					);
+				for (const [missingRun, orderId] of [
+					[randomUUID(), "order_001"],
+					[runId, "missing-order"],
+				]) {
+					assert.ok(missingRun && orderId);
+					const response = await send(
+						profile,
+						missingRun,
+						event("processing", 1, orderId),
+					);
+					assert.equal(response.status, 409);
+					assert.match((await response.json()).error, /fixture.*missing/i);
+				}
+				assert.equal((await state(runId)).status, "created");
+				assert.equal((await state(runId)).version, "0");
+			},
+		);
+		await t.test(
+			`${profile}: a payment after status updates preserves status and stock behavior`,
+			async () => {
+				const runId = await prepare();
+				assert.equal(
+					(await send(profile, runId, event("shipped", 3))).status,
+					200,
+				);
+				const payment = {
+					id: "payment_1",
+					type: "payment.succeeded",
+					data: { orderId: "order_001", quantity: 2 },
+				};
+				assert.equal((await send(profile, runId, payment)).status, 200);
+				assert.deepEqual(await state(runId), {
+					status: "shipped",
+					version: "3",
+					paid: true,
+					quantity: 2,
+					stock: 8,
+					fulfillments: 1,
+					claims: profile === "corrected" ? 1 : 0,
+				});
+			},
+		);
+	}
+	await t.test(
+		"corrected simultaneous updates retain the highest version",
+		async () => {
+			const runId = await prepare();
+			const responses = await Promise.all(
+				[1, 5, 2, 4, 3].map((version) =>
+					send("corrected", runId, event(`status-${version}`, version)),
+				),
+			);
+			for (const response of responses) assert.equal(response.status, 200);
+			assert.equal((await state(runId)).status, "status-5");
+			assert.equal((await state(runId)).version, "5");
+		},
+	);
+	await t.test(
+		"corrected binds versions beyond PostgreSQL integer range without precision loss",
+		async () => {
+			const runId = await prepare();
+			assert.equal(
+				(
+					await send(
+						"corrected",
+						runId,
+						event("final", Number.MAX_SAFE_INTEGER),
+					)
+				).status,
+				200,
+			);
+			assert.equal(
+				(
+					await send(
+						"corrected",
+						runId,
+						event("older", Number.MAX_SAFE_INTEGER - 1),
+					)
+				).status,
+				200,
+			);
+			assert.equal((await state(runId)).version, "9007199254740991");
+			assert.equal((await state(runId)).status, "final");
+		},
+	);
+});

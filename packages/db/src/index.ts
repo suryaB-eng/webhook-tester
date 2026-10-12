@@ -183,7 +183,7 @@ export async function prepareDemoFixtures(
 			for (const [orderId, quantity] of unique) {
 				await setFixtureBudget(client, deadline);
 				await client.query(
-					"INSERT INTO orders(run_id,order_id,quantity) VALUES($1,$2,$3)",
+					"INSERT INTO orders(run_id,order_id,quantity,status,version) VALUES($1,$2,$3,'created',0)",
 					[runId, orderId, quantity],
 				);
 			}

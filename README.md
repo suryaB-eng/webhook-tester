@@ -1,6 +1,6 @@
 # Webhook tester
 
-A local workspace for testing payment webhooks.
+A local workspace for testing payment and order-status webhooks.
 
 ## Quick start
 
@@ -29,32 +29,34 @@ database passwords. Stop services with `docker compose down`.
 
 **Working now**
 
-- Two saved presets: One payment and Sequential duplicate payment. Restarting
-  the API seeds missing presets without replacing saved edits.
-- Validated sequential scenarios, server-selected payment profiles, and queued
-  runs with immutable scenario and public target snapshots.
-- A separate worker with PostgreSQL ownership, sequential delivery, bounded
-  responses, timeouts, and SELECT-only scalar assertions.
+- Four saved presets: One payment, Sequential duplicate payment, Concurrent
+  duplicate payment, and Status version 2 before version 1. Restarting the API
+  inserts missing presets without replacing saved edits.
+- Validated scenarios, server-selected profiles, and queued runs with immutable
+  scenario and public target snapshots.
+- A separate worker with PostgreSQL ownership, sequential and bounded concurrent
+  delivery, bounded responses, timeouts, and SELECT-only scalar assertions.
 - Saved request/response details, timestamps, assertion expectations/results,
   and run status, shown through real API polling.
-- Run-scoped fixtures and transactional flawed/corrected payment handlers.
+- Run-scoped fixtures, transactional payment handling, and version-guarded status
+  updates. Corrected handling deduplicates payments and ignores stale/equal versions.
 
-One payment passes both profiles with fulfillment count 1 and inventory 9.
-Sequential duplicate payment returns HTTP 200 twice on both profiles, but
-Without deduplication fails its assertions at 2/8; With deduplication passes at 1/9.
+One payment passes both profiles at fulfillment 1 / inventory 9. Sequential and
+concurrent duplicates return HTTP 200 twice: Without deduplication fails at 2/8;
+With deduplication passes at 1/9. Sending status version 2 (shipped) before version 1
+(processing) leaves processing/version 1 on the flawed profile and shipped/version 2
+on the corrected profile.
 
 Normal completion saves results before removing that run's fixtures.
 Transport timeouts, ownership loss, and failed result writes retain run-scoped
 fixtures so uncertain work and unsaved observations remain inspectable.
-Abandoned runs become interrupted and are never
-automatically replayed. Cleanup failure is an error.
+Abandoned runs become interrupted and are never automatically replayed. Cleanup failure is an error.
 
 **Next up**
 
 - Scenario authoring.
-- Concurrent delivery and additional execution profiles.
 
-These features are intended and are not implemented.
+Scenario authoring is intended and is not implemented.
 
 ## Development
 
@@ -92,11 +94,11 @@ docker compose -f compose.test.yaml down
 docker compose start worker
 ```
 
-For a duplicate-payment API check:
+For a concurrent duplicate-payment API check:
 
 ```powershell
 $headers = @{ Origin = "http://127.0.0.1:4173" }
-$body = @{ scenarioId = "sequential-duplicate-payment"; targetId = "demo-flawed" } | ConvertTo-Json
+$body = @{ scenarioId = "concurrent-duplicate-payment"; targetId = "demo-flawed" } | ConvertTo-Json
 $queued = Invoke-RestMethod http://127.0.0.1:4000/api/runs -Method Post -Headers $headers -ContentType "application/json" -Body $body
 $deadline = (Get-Date).AddSeconds(60)
 do {
@@ -115,7 +117,7 @@ The same GET URL always reads that saved run; it does not launch another run.
 See [architecture](docs/architecture.md) for service boundaries.
 
 Dependency/configuration choices, validation, transaction, enqueue/snapshot,
-scalar assertion, and bounded response patterns were adapted from relevant
-modules of `suryaB-eng/webhook-lab` at
+scalar assertion, delivery scheduling, and bounded response patterns were adapted
+from relevant modules of `suryaB-eng/webhook-lab` at
 `e6a761182bd338f68dd439e260bb25b3d91bb44c`. Its Git history was not imported.
 The reference MIT notice is preserved in [LICENSE](LICENSE).

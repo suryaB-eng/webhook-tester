@@ -20,6 +20,7 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 h3 { font-size: 14px; margin: 16px 0 8px; }
 p { margin: 0; }
 .subheading, .section-help { color: #617268; font-size: 14px; margin-top: 4px; }
+.profile-help { margin-bottom: 24px; }
 .count { color: #617268; font-size: 13px; white-space: nowrap; }
 .panel { background: #fff; border: 1px solid #dde5df; border-radius: 8px; padding: 24px; margin-bottom: 20px; }
 .scenario-card p { color: #617268; font-size: 14px; }

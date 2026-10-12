@@ -160,10 +160,23 @@ for (const [field, min, max] of [
 	});
 }
 
-test("rejects concurrent mode explicitly", () => {
+test("accepts concurrent steps alongside sequential steps", () => {
 	const input = fixture();
 	first(input.steps).mode = "concurrent";
-	assert.throws(() => parseScenarioV1(input), /sequential|concurrent/);
+	assert.deepEqual(parseScenarioV1(input), input);
+	input.steps.push({
+		id: "delay",
+		mode: "sequential",
+		delayBeforeMs: 0,
+		deliveries: [],
+	});
+	assert.deepEqual(parseScenarioV1(input), input);
+});
+
+test("rejects unsupported step modes", () => {
+	const input = fixture();
+	first(input.steps).mode = "parallel";
+	assert.throws(() => parseScenarioV1(input));
 });
 
 test("rejects structural unknown keys at every level", () => {

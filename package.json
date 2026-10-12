@@ -9,6 +9,7 @@
   },
   "workspaces": [
     "packages/contracts",
+    "packages/runner",
     "packages/db",
     "apps/api",
     "apps/demo-target",
@@ -22,7 +23,7 @@
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",
     "build": "npm run build --workspaces",
-    "build:shared": "npm run build -w @webhook-tester/contracts && npm run build -w @webhook-tester/db",
+    "build:shared": "npm run build -w @webhook-tester/contracts && npm run build -w @webhook-tester/runner && npm run build -w @webhook-tester/db",
     "pretypecheck": "npm run build:shared",
     "pretest": "npm run build:shared",
     "migrate": "npm run build:shared && node --env-file-if-exists=.env packages/db/dist/migrate.js",

@@ -481,13 +481,16 @@ describe("isolated PostgreSQL database contracts", {
 		}
 	});
 
-	it("allows the target application only the payment mutations", async () => {
+	it("allows the target application payment and status mutations while denying fixture ownership", async () => {
 		const id = run();
 		await prepareDemoFixtures(pools.fixture, id, [
 			{ orderId: "pay", quantity: 2 },
 		]);
 		await withTransaction(pools.targetApp, async (client) => {
-			await client.query("UPDATE orders SET paid=true WHERE run_id=$1", [id]);
+			await client.query(
+				"UPDATE orders SET paid=true, status='shipped', version=2 WHERE run_id=$1",
+				[id],
+			);
 			await client.query(
 				"UPDATE inventory SET quantity=quantity-2 WHERE run_id=$1",
 				[id],
@@ -501,6 +504,15 @@ describe("isolated PostgreSQL database contracts", {
 				[randomUUID(), id, "pay", "evt"],
 			);
 		});
+		assert.deepEqual(
+			(
+				await pools.query.query(
+					"SELECT paid, status, version::int AS version FROM orders WHERE run_id=$1",
+					[id],
+				)
+			).rows,
+			[{ paid: true, status: "shipped", version: 2 }],
+		);
 		for (const table of [
 			"orders",
 			"inventory",
@@ -618,6 +630,12 @@ describe("isolated PostgreSQL database contracts", {
 				);
 				await assert.rejects(
 					client.query(`DELETE FROM ${table} WHERE run_id=$1`, [id]),
+					{ code: "42501" },
+				);
+			}
+			for (const update of ["status='forbidden'", "version=3"]) {
+				await assert.rejects(
+					client.query(`UPDATE orders SET ${update} WHERE run_id=$1`, [id]),
 					{ code: "42501" },
 				);
 			}

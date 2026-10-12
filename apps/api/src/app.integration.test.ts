@@ -72,7 +72,7 @@ test("real HTTP scenario enqueue stores immutable evidence and enforces the loca
 			body: JSON.stringify(body),
 		});
 	await t.test(
-		"GET lists two current presets and valid public targets",
+		"GET lists payment and status plans and valid public targets",
 		async () => {
 			const result = await fetch(`${address}/api/scenarios`);
 			assert.equal(result.status, 200);
@@ -82,6 +82,19 @@ test("real HTTP scenario enqueue stores immutable evidence and enforces the loca
 				scenarios.some(
 					(scenario) => scenario.id === "sequential-duplicate-payment",
 				),
+			);
+			const concurrent = scenarios.find(
+				(scenario) => scenario.id === "concurrent-duplicate-payment",
+			);
+			assert.equal(concurrent?.scenario.steps[0]?.mode, "concurrent");
+			assert.equal(concurrent?.scenario.steps[0]?.deliveries.length, 2);
+			assert.equal(concurrent?.scenario.limits.maxConcurrency, 2);
+			const statuses = scenarios.find(
+				(scenario) => scenario.id === "status-version-out-of-order",
+			);
+			assert.deepEqual(
+				statuses?.scenario.assertions.map((assertion) => assertion.expected),
+				["shipped", 2],
 			);
 			const resultTargets = await fetch(`${address}/api/targets`);
 			assert.deepEqual(await resultTargets.json(), [...targets.values()]);
@@ -126,32 +139,38 @@ test("real HTTP scenario enqueue stores immutable evidence and enforces the loca
 			);
 		},
 	);
-	await t.test("restart seeding preserves stored user edits", async () => {
-		const seed = (
-			await pool.query(
-				"SELECT definition FROM scenarios WHERE id='one-payment'",
-			)
-		).rows[0]?.definition;
-		assert.ok(seed);
-		try {
-			await pool.query(
-				"UPDATE scenarios SET definition=$1 WHERE id='one-payment'",
-				[JSON.stringify({ ...seed, name: "User edit survives restart" })],
-			);
-			await seedScenarios(pool);
-			assert.equal(
-				(await listScenarios(pool)).find(
-					(scenario) => scenario.id === "one-payment",
-				)?.name,
-				"User edit survives restart",
-			);
-		} finally {
-			await pool.query(
-				"UPDATE scenarios SET definition=$1 WHERE id='one-payment'",
-				[JSON.stringify(seed)],
-			);
-		}
-	});
+	await t.test(
+		"restart seeding preserves stored user edits in old and new presets",
+		async () => {
+			for (const id of [
+				"one-payment",
+				"concurrent-duplicate-payment",
+				"status-version-out-of-order",
+			]) {
+				const seed = (
+					await pool.query("SELECT definition FROM scenarios WHERE id=$1", [id])
+				).rows[0]?.definition;
+				assert.ok(seed);
+				try {
+					await pool.query("UPDATE scenarios SET definition=$2 WHERE id=$1", [
+						id,
+						JSON.stringify({ ...seed, name: "User edit survives restart" }),
+					]);
+					await seedScenarios(pool);
+					assert.equal(
+						(await listScenarios(pool)).find((scenario) => scenario.id === id)
+							?.name,
+						"User edit survives restart",
+					);
+				} finally {
+					await pool.query("UPDATE scenarios SET definition=$2 WHERE id=$1", [
+						id,
+						JSON.stringify(seed),
+					]);
+				}
+			}
+		},
+	);
 	await t.test(
 		"enforces exact configured Origin, JSON, strict body, configured targets and existing scenarios",
 		async () => {

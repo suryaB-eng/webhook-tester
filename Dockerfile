@@ -3,6 +3,7 @@ FROM node:22.14.0-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/runner/package.json packages/runner/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/demo-target/package.json apps/demo-target/package.json

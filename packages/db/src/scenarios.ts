@@ -58,13 +58,84 @@ function preset(duplicate: boolean): ScenarioV1 {
 	};
 }
 
+function concurrentPaymentPreset(): ScenarioV1 {
+	const scenario = preset(true);
+	scenario.name = "Concurrent duplicate payment";
+	scenario.description =
+		"Deliver the same payment concurrently and check that its effect happens once.";
+	scenario.steps = scenario.steps.map((step) => ({
+		...step,
+		mode: "concurrent",
+	}));
+	scenario.limits.maxConcurrency = 2;
+	return scenario;
+}
+
+function statusPreset(): ScenarioV1 {
+	return {
+		schemaVersion: 1,
+		name: "Status version 2 before version 1",
+		description:
+			"Deliver a newer status before an older one and check that the newer state remains.",
+		targetId: "demo-flawed",
+		events: [
+			{
+				id: "status_v2",
+				payload: {
+					id: "status_002",
+					type: "order.status_changed",
+					data: { orderId: "order_001", status: "shipped", version: 2 },
+				},
+			},
+			{
+				id: "status_v1",
+				payload: {
+					id: "status_001",
+					type: "order.status_changed",
+					data: { orderId: "order_001", status: "processing", version: 1 },
+				},
+			},
+		],
+		steps: [
+			{
+				id: "statuses",
+				mode: "sequential",
+				delayBeforeMs: 0,
+				deliveries: [
+					{ deliveryId: "delivery_1", eventId: "status_v2" },
+					{ deliveryId: "delivery_2", eventId: "status_v1" },
+				],
+			},
+		],
+		limits: { maxConcurrency: 1, requestTimeoutMs: 3000, runTimeoutMs: 30000 },
+		assertions: [
+			{
+				id: "latest_status",
+				name: "Latest status is shipped",
+				query:
+					"SELECT status AS value FROM orders WHERE run_id=$1 AND order_id='order_001'",
+				expected: "shipped",
+			},
+			{
+				id: "latest_version",
+				name: "Latest version is 2",
+				query:
+					"SELECT version::int AS value FROM orders WHERE run_id=$1 AND order_id='order_001'",
+				expected: 2,
+			},
+		],
+	};
+}
+
 export async function seedScenarios(pool: Pool): Promise<void> {
 	await withTransaction(pool, async (client) => {
-		for (const [id, duplicate] of [
-			["one-payment", false],
-			["sequential-duplicate-payment", true],
+		for (const [id, scenario] of [
+			["one-payment", preset(false)],
+			["sequential-duplicate-payment", preset(true)],
+			["concurrent-duplicate-payment", concurrentPaymentPreset()],
+			["status-version-out-of-order", statusPreset()],
 		] as const) {
-			const definition = parseScenarioV1(preset(duplicate));
+			const definition = parseScenarioV1(scenario);
 			validateDemoScenario(definition);
 			await client.query(
 				"INSERT INTO scenarios(id,definition) VALUES($1,$2::jsonb) ON CONFLICT(id) DO NOTHING",

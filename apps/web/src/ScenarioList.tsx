@@ -67,13 +67,18 @@ export function ScenarioList() {
 				<div>
 					<h1>Scenarios</h1>
 					<p className="subheading">
-						Run a saved payment scenario against either payment handler.
+						Run a saved webhook scenario against either profile.
 					</p>
 				</div>
 				{!loading && (
 					<span className="count">{scenarios.length} scenarios</span>
 				)}
 			</header>
+			<p className="section-help profile-help">
+				Without deduplication repeats payment effects and overwrites status on
+				arrival. With deduplication applies each payment once and keeps the
+				newest status version.
+			</p>
 			{error && (
 				<div className="notice error" role="alert">
 					<p>{error}</p>

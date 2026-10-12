@@ -46,7 +46,7 @@ const deliverySchema = z.strictObject({
 });
 const stepSchema = z.strictObject({
 	id: configurationIdSchema,
-	mode: z.literal("sequential"),
+	mode: z.enum(["sequential", "concurrent"]),
 	delayBeforeMs: z.number().int().min(0).max(5000),
 	deliveries: z.array(deliverySchema).max(MAX_DELIVERIES),
 });
