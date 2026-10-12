@@ -1,0 +1,13 @@
+.git
+node_modules
+**/node_modules
+**/dist
+.env
+.env.*
+.npm-cache
+.docker-config
+coverage
+test-results
+playwright-report
+.playwright-browsers
+*.log

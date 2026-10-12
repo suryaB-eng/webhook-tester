@@ -1,0 +1,23 @@
+{
+  "name": "webhook-tester",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.2",
+  "engines": { "node": ">=22.14.0" },
+  "workspaces": ["apps/api", "apps/web"],
+  "scripts": {
+    "dev:api": "npm run dev -w @webhook-tester/api",
+    "dev:web": "npm run dev -w @webhook-tester/web",
+    "lint": "biome lint .",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.13",
+    "@types/node": "26.6.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

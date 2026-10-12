@@ -1,0 +1,14 @@
+{
+  "name": "@webhook-tester/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "tsx --test src/app.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": { "fastify": "5.12.4" }
+}

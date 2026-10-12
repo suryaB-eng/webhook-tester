@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.npm-cache/
+.docker-config/
+coverage/
+test-results/
+playwright-report/
+.playwright-browsers/
+*.log
+*.tsbuildinfo
+.vscode/
+.idea/
