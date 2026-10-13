@@ -2,6 +2,7 @@ import type {
 	PublicTarget,
 	RunEvent,
 	RunResponse,
+	RunHistoryPage,
 	ScenarioSummary,
 	ScenarioV1,
 	SavedScenario,
@@ -139,6 +140,24 @@ export function loadRun(
 	base = "",
 ): Promise<RunResponse> {
 	return request(`/api/runs/${encodeURIComponent(runId)}`, signal, base);
+}
+
+export function loadRunHistory(
+	before?: string,
+	signal?: AbortSignal,
+	base = "",
+): Promise<RunHistoryPage> {
+	return request(`/api/runs?limit=20${before ? `&before=${encodeURIComponent(before)}` : ""}`, signal, base);
+}
+
+export async function rerunRun(
+	runId: string,
+	targetId: string,
+	signal?: AbortSignal,
+	base = "",
+): Promise<string> {
+	const result = await request<{ runId: string }>(`/api/runs/${encodeURIComponent(runId)}/rerun`, signal, base, { targetId });
+	return result.runId;
 }
 
 type RunEventSource = {

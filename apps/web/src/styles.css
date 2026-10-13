@@ -91,6 +91,21 @@ input[type="file"] { padding: 8px; }
 .timeline-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; font-size: 13px; }
 .timeline-heading time { color: #617268; font-size: 12px; }
 .timeline-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.run-history-link { margin-left: 20px; }
+.table-link { text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.history-run-id { display: block; color: #617268; font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
+.history-table td { vertical-align: top; }
+.history-table td:nth-child(2), .history-table td:nth-child(3), .history-table td:nth-child(5) { min-width: 160px; max-width: 280px; white-space: normal; }
+.comparison-picker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 16px; }
+.comparison-picker .form-field, .rerun-form .form-field { margin: 0; }
+.comparison-picker .button-link { justify-content: center; }
+.picker-help { grid-column: 1 / -1; }
+.history-pagination { display: flex; justify-content: flex-end; gap: 10px; margin: 20px 0; }
+.rerun-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; margin-top: 14px; }
+.comparison-identities { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+.comparison-table td { min-width: 160px; max-width: 420px; white-space: normal; vertical-align: top; overflow-wrap: anywhere; }
+.comparison-table pre, .comparison-table details, .comparison-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.comparison-table pre { min-width: 160px; }
 @media (max-width: 700px) {
   .shell { flex-direction: column; }
   .sidebar { width: 100%; padding: 20px; border-right: 0; border-bottom: 1px solid #dde5df; }
@@ -100,4 +115,6 @@ input[type="file"] { padding: 8px; }
   .page-header { align-items: flex-start; }
   h1 { font-size: 23px; }
   .panel { padding: 20px; }
+  .comparison-picker, .comparison-identities, .rerun-form { grid-template-columns: minmax(0, 1fr); }
+  .comparison-picker .button-link, .rerun-form button { width: 100%; }
 }

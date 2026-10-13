@@ -84,6 +84,8 @@ export interface RunResponse {
 	phase: string;
 	scenarioSnapshot: ScenarioV1;
 	targetSnapshot: PublicTarget;
+	sourceRunId: string | null;
+	targetOverride: string | null;
 	createdAt: string;
 	startedAt: string | null;
 	completedAt: string | null;
@@ -92,4 +94,22 @@ export interface RunResponse {
 	assertions: AssertionResult[];
 	eventCursor: string;
 	events: RunEvent[];
+}
+
+export interface RunSummary {
+	id: string;
+	status: RunStatus;
+	phase: string;
+	scenarioName: string;
+	targetSnapshot: PublicTarget;
+	createdAt: string;
+	startedAt: string | null;
+	completedAt: string | null;
+	sourceRunId: string | null;
+	targetOverride: string | null;
+}
+
+export interface RunHistoryPage {
+	runs: RunSummary[];
+	nextCursor: string | null;
 }

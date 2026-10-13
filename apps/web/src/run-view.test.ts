@@ -3,7 +3,19 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RunEvent } from "@webhook-tester/contracts";
+import * as runView from "./RunView.js";
 import { RunTimeline } from "./RunView.js";
+
+test("saved rerun details link to the source identity and label its target override", () => {
+	assert.equal(typeof runView.RunLineage, "function");
+	const html = renderToStaticMarkup(createElement(runView.RunLineage, { sourceRunId: "source/run", targetOverride: "demo-corrected" }));
+	assert.match(html, /href="#\/runs\/source%2Frun"/);
+	assert.match(html, /<dt>Source run<\/dt>/);
+	assert.match(html, /<dt>Target override<\/dt>/);
+	assert.match(html, /demo-corrected/);
+	const original = renderToStaticMarkup(createElement(runView.RunLineage, { sourceRunId: null, targetOverride: null }));
+	assert.doesNotMatch(original, /href=|Target override/);
+});
 
 test("saved timeline renders delivery outcomes assertion scalars and semantic timestamps", () => {
 	const events: RunEvent[] = [

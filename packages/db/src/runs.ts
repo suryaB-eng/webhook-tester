@@ -17,6 +17,14 @@ import { appendRunEvent, readRunEvents } from "./events.js";
 
 export class ScenarioNotFoundError extends Error {}
 
+export class RunNotFoundError extends Error {
+	readonly statusCode = 404;
+}
+
+export class RunNotTerminalError extends Error {
+	readonly statusCode = 409;
+}
+
 async function insertEvidence(
 	client: PoolClient,
 	runId: string,
@@ -59,6 +67,41 @@ async function insertEvidence(
 	}
 }
 
+async function enqueueSnapshot(
+	client: PoolClient,
+	input: ScenarioV1,
+	target: PublicTarget,
+	sourceRunId: string | null = null,
+	targetOverride: string | null = null,
+): Promise<string> {
+	const scenario = parseScenarioV1({ ...input, targetId: target.id });
+	validateDemoScenario(scenario);
+	if (!target.name.trim()) throw new Error("Target name is required");
+	// Server configuration may carry endpoints and credentials; persist public identity only.
+	const snapshot: PublicTarget = { id: target.id, name: target.name };
+	const id = randomUUID();
+	await client.query(
+		`INSERT INTO runs(id,status,phase,scenario_snapshot,target_snapshot,source_run_id,target_override)
+      VALUES($1,'queued','queued',$2::jsonb,$3::jsonb,$4,$5)`,
+		[
+			id,
+			JSON.stringify(scenario),
+			JSON.stringify(snapshot),
+			sourceRunId,
+			targetOverride,
+		],
+	);
+	await client.query("INSERT INTO jobs(run_id,status) VALUES($1,'queued')", [
+		id,
+	]);
+	await insertEvidence(client, id, scenario);
+	await appendRunEvent(client, id, "run.queued", {
+		status: "queued",
+		phase: "queued",
+	});
+	return id;
+}
+
 export async function enqueueRun(
 	pool: Pool,
 	scenarioId: string,
@@ -76,23 +119,35 @@ export async function enqueueRun(
 			typeof targetSelection === "function"
 				? targetSelection(stored)
 				: targetSelection;
-		const scenario = parseScenarioV1({ ...stored, targetId: target.id });
-		validateDemoScenario(scenario);
-		if (!target.name.trim()) throw new Error("Target name is required");
-		// Copy only the public identity, even when server configuration also holds an endpoint.
-		const snapshot: PublicTarget = { id: target.id, name: target.name };
-		const id = randomUUID();
-		await client.query(
-			`INSERT INTO runs(id,status,phase,scenario_snapshot,target_snapshot)
-      VALUES($1,'queued','queued',$2::jsonb,$3::jsonb)`,
-			[id, JSON.stringify(scenario), JSON.stringify(snapshot)],
-		);
-		await client.query("INSERT INTO jobs(run_id,status) VALUES($1,'queued')", [
-			id,
+		return enqueueSnapshot(client, stored, target);
+	});
+}
+
+export async function enqueueSnapshotRerun(
+	pool: Pool,
+	sourceRunId: string,
+	targetId: string,
+	resolveTarget: (id: string) => PublicTarget | undefined,
+): Promise<string> {
+	return withTransaction(pool, async (client) => {
+		const result = await client.query<{
+			status: RunStatus;
+			scenario_snapshot: unknown;
+		}>("SELECT status,scenario_snapshot FROM runs WHERE id=$1 FOR SHARE", [
+			sourceRunId,
 		]);
-		await insertEvidence(client, id, scenario);
-		await appendRunEvent(client, id, "run.queued", { status: "queued", phase: "queued" });
-		return id;
+		const source = result.rows[0];
+		if (!source) throw new RunNotFoundError("Run not found");
+		if (!["passed", "failed", "error", "interrupted"].includes(source.status))
+			throw new RunNotTerminalError("Only completed runs can be rerun");
+		const stored = parseScenarioV1(source.scenario_snapshot);
+		validateDemoScenario(stored);
+		const target = resolveTarget(targetId);
+		if (!target)
+			throw Object.assign(new Error("Target is not configured"), {
+				statusCode: 400,
+			});
+		return enqueueSnapshot(client, stored, target, sourceRunId, targetId);
 	});
 }
 
@@ -102,6 +157,8 @@ interface RunRow {
 	phase: string;
 	scenario_snapshot: ScenarioV1;
 	target_snapshot: PublicTarget;
+	source_run_id: string | null;
+	target_override: string | null;
 	created_at: Date;
 	started_at: Date | null;
 	completed_at: Date | null;
@@ -141,7 +198,9 @@ export async function getRun(
 	// One database snapshot keeps a polling response consistent while the worker writes results.
 	const client = await pool.connect();
 	let discard = false;
-	const markBroken = () => { discard = true; };
+	const markBroken = () => {
+		discard = true;
+	};
 	client.on("error", markBroken);
 	try {
 		await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -173,6 +232,8 @@ export async function getRun(
 				id: run.target_snapshot.id,
 				name: run.target_snapshot.name,
 			},
+			sourceRunId: run.source_run_id,
+			targetOverride: run.target_override,
 			createdAt: run.created_at.toISOString(),
 			startedAt: iso(run.started_at),
 			completedAt: iso(run.completed_at),
@@ -207,7 +268,11 @@ export async function getRun(
 		};
 	} catch (error) {
 		if (!discard) {
-			try { await client.query("ROLLBACK"); } catch { discard = true; }
+			try {
+				await client.query("ROLLBACK");
+			} catch {
+				discard = true;
+			}
 		}
 		throw error;
 	} finally {

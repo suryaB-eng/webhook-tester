@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RunView } from "./RunView";
+import { RunHistory } from "./RunHistory";
+import { RunCompare } from "./RunCompare";
 import { ScenarioList } from "./ScenarioList";
 import { ScenarioEditor } from "./ScenarioEditor";
 import type { ScenarioV1 } from "@webhook-tester/contracts";
@@ -53,6 +55,15 @@ export function App() {
 		/* Invalid route returns to the list. */
 	}
 	const creating = hash === "#/scenarios/new";
+	let comparison: { leftId: string; rightId: string } | null = null;
+	try {
+		const match = /^#\/compare\/([^/]+)\/([^/]+)$/.exec(hash);
+		if (match?.[1] && match[2]) comparison = { leftId: decodeURIComponent(match[1]), rightId: decodeURIComponent(match[2]) };
+	} catch {
+		/* Invalid route returns to the scenario list. */
+	}
+	const history = hash === "#/runs";
+	const viewingRuns = history || Boolean(runId) || Boolean(comparison);
 
 	return (
 		<div className="shell">
@@ -61,14 +72,21 @@ export function App() {
 					Webhook tester
 				</a>
 				<nav aria-label="Main navigation">
-					<a href="#/scenarios" aria-current={runId ? undefined : "page"}>
+					<a href="#/scenarios" aria-current={viewingRuns ? undefined : "page"}>
 						Scenarios
+					</a>
+					<a href="#/runs" aria-current={viewingRuns ? "page" : undefined}>
+						Run history
 					</a>
 				</nav>
 				<p className="sidebar-note">Local workspace</p>
 			</aside>
 			<main>
-				{runId ? (
+				{comparison ? (
+					<RunCompare key={`${comparison.leftId}:${comparison.rightId}`} leftId={comparison.leftId} rightId={comparison.rightId} />
+				) : history ? (
+					<RunHistory />
+				) : runId ? (
 					<RunView key={runId} runId={runId} />
 				) : creating || editingId ? (
 					<ScenarioEditor

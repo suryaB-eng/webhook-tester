@@ -1,12 +1,20 @@
-import type { JsonScalar, RunEvent } from "@webhook-tester/contracts";
+import type { JsonScalar, RunEvent, RunResponse } from "@webhook-tester/contracts";
 import { useState } from "react";
 import { useRunStream } from "./useRunStream";
+import { RerunControls } from "./RerunControls";
 
 function time(value: string | null) {
 	return value ? new Date(value).toLocaleString() : "—";
 }
 function scalar(value: JsonScalar) {
 	return JSON.stringify(value);
+}
+
+export function RunLineage({ sourceRunId, targetOverride }: Pick<RunResponse, "sourceRunId" | "targetOverride">) {
+	return <>
+		{sourceRunId && <div><dt>Source run</dt><dd><a className="table-link mono" href={`#/runs/${encodeURIComponent(sourceRunId)}`}>{sourceRunId}</a></dd></div>}
+		{targetOverride && <div><dt>Target override</dt><dd className="mono">{targetOverride}</dd></div>}
+	</>;
 }
 
 const eventLabels: Record<RunEvent["type"], string> = {
@@ -74,6 +82,7 @@ export function RunView({ runId }: { runId: string }) {
 			<a className="back-link" href="#/scenarios">
 				← Scenarios
 			</a>
+			<a className="back-link run-history-link" href="#/runs">Run history</a>
 			{error && (
 				<div className="notice error" role="alert">
 					<p>{error}</p>
@@ -110,6 +119,7 @@ export function RunView({ runId }: { runId: string }) {
 					</div>
 					<section className="panel run-summary" aria-label="Run details">
 						<dl>
+							<RunLineage sourceRunId={run.sourceRunId} targetOverride={run.targetOverride} />
 							<div>
 								<dt>Run ID</dt>
 								<dd className="mono">{run.id}</dd>
@@ -133,6 +143,7 @@ export function RunView({ runId }: { runId: string }) {
 						</dl>
 						{run.error && <p className="error-text">{run.error}</p>}
 					</section>
+					<RerunControls key={run.id} run={run} />
 					<RunTimeline events={run.events} onSelectDelivery={setSelectedId} />
 					<section className="panel" aria-labelledby="deliveries-title">
 						<h2 id="deliveries-title">Deliveries</h2>

@@ -1,5 +1,10 @@
 import type { PublicTarget } from "@webhook-tester/contracts";
-import { enqueueRun, getRun } from "@webhook-tester/db";
+import {
+	enqueueRun,
+	enqueueSnapshotRerun,
+	getRun,
+	listRunHistory,
+} from "@webhook-tester/db";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { localJsonMutation } from "./mutation.js";
@@ -17,6 +22,59 @@ export function registerRunRoutes(
 	targets: ReadonlyMap<string, PublicTarget>,
 	allowedOrigin: string,
 ): void {
+	app.get<{ Querystring: { limit?: string; before?: string } }>(
+		"/api/runs",
+		{
+			schema: {
+				querystring: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						limit: { type: "string", pattern: "^[0-9]+$", maxLength: 2 },
+						before: { type: "string", minLength: 1, maxLength: 300 },
+					},
+				},
+			},
+		},
+		async (request) =>
+			listRunHistory(
+				pool,
+				request.query.limit === undefined ? 20 : Number(request.query.limit),
+				request.query.before,
+			),
+	);
+
+	app.post<{ Params: { id: string }; Body: { targetId: string } }>(
+		"/api/runs/:id/rerun",
+		{
+			onRequest: localJsonMutation(allowedOrigin),
+			schema: {
+				params: {
+					type: "object",
+					required: ["id"],
+					properties: { id: { type: "string", pattern: uuidPattern } },
+				},
+				body: {
+					type: "object",
+					additionalProperties: false,
+					required: ["targetId"],
+					properties: {
+						targetId: { type: "string", minLength: 1, maxLength: 100 },
+					},
+				},
+			},
+		},
+		async (request, reply) => {
+			const runId = await enqueueSnapshotRerun(
+				pool,
+				request.params.id,
+				request.body.targetId,
+				(id) => targets.get(id),
+			);
+			return reply.code(202).send({ runId });
+		},
+	);
+
 	app.post<{ Body: LaunchBody }>(
 		"/api/runs",
 		{

@@ -10,7 +10,7 @@ function event(cursor: string, type: RunEvent["type"] = "run.phase"): RunEvent {
 }
 function snapshot(cursor: string, status: RunResponse["status"] = "running"): RunResponse {
 	return {
-		id: "saved-run", status, phase: status === "passed" ? "completed" : "delivering",
+		id: "saved-run", status, phase: status === "passed" ? "completed" : "delivering", sourceRunId: null, targetOverride: null,
 		scenarioSnapshot: { schemaVersion: 1, name: "Saved scenario", description: "", targetId: "demo", events: [], steps: [], limits: { maxConcurrency: 1, requestTimeoutMs: 1000, runTimeoutMs: 5000 }, assertions: [] },
 		targetSnapshot: { id: "demo", name: "Demo" }, createdAt: "2026-10-12T12:00:00.000Z", startedAt: null, completedAt: status === "passed" ? "2026-10-12T12:00:01.000Z" : null,
 		error: null, deliveries: [], assertions: [], eventCursor: cursor, events: cursor === "0" ? [] : [event(cursor)],
