@@ -84,6 +84,13 @@ services:
         condition: service_healthy
       demo-target:
         condition: service_healthy
+    healthcheck:
+      # Readiness checks the worker's three database roles against migrated tables.
+      test: ["CMD", "node", "-e", "const {Pool}=require('pg');Promise.all([['APP_DATABASE_URL','SELECT id FROM runs LIMIT 0'],['TARGET_FIXTURE_DATABASE_URL','SELECT run_id FROM orders LIMIT 0'],['TARGET_QUERY_DATABASE_URL','SELECT run_id FROM orders LIMIT 0']].map(async ([key,text])=>{const pool=new Pool({connectionString:process.env[key],connectionTimeoutMillis:1000});try{await pool.query({text,query_timeout:1000})}finally{await pool.end()}})).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
 
   web:
     build: .

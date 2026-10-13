@@ -1,23 +1,37 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
-  "files": {
-    "includes": [
-      "apps/**",
-      "packages/**",
-      "!**/dist",
-      "!**/node_modules"
-    ]
-  },
-  "formatter": {
-    "enabled": false
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "preset": "recommended"
-    }
-  },
-  "assist": {
-    "enabled": false
-  }
+	"$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/dist",
+			"!.git",
+			"!.npm-cache",
+			"!.docker-config",
+			"!.playwright-browsers",
+			"!coverage",
+			"!test-results",
+			"!playwright-report",
+			"!docs/assets",
+			"!.agents",
+			"!.codex"
+		]
+	},
+	"formatter": {
+		"enabled": true
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended"
+		}
+	},
+	"assist": {
+		"enabled": false
+	},
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	}
 }

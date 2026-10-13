@@ -147,7 +147,11 @@ export function loadRunHistory(
 	signal?: AbortSignal,
 	base = "",
 ): Promise<RunHistoryPage> {
-	return request(`/api/runs?limit=20${before ? `&before=${encodeURIComponent(before)}` : ""}`, signal, base);
+	return request(
+		`/api/runs?limit=20${before ? `&before=${encodeURIComponent(before)}` : ""}`,
+		signal,
+		base,
+	);
 }
 
 export async function rerunRun(
@@ -156,7 +160,12 @@ export async function rerunRun(
 	signal?: AbortSignal,
 	base = "",
 ): Promise<string> {
-	const result = await request<{ runId: string }>(`/api/runs/${encodeURIComponent(runId)}/rerun`, signal, base, { targetId });
+	const result = await request<{ runId: string }>(
+		`/api/runs/${encodeURIComponent(runId)}/rerun`,
+		signal,
+		base,
+		{ targetId },
+	);
 	return result.runId;
 }
 
@@ -167,8 +176,15 @@ type RunEventSource = {
 	close(): void;
 };
 const eventTypes = new Set([
-	"run.queued", "run.started", "run.phase", "run.completed",
-	"delivery.scheduled", "delivery.started", "delivery.completed", "delivery.interrupted", "assertion.completed",
+	"run.queued",
+	"run.started",
+	"run.phase",
+	"run.completed",
+	"delivery.scheduled",
+	"delivery.started",
+	"delivery.completed",
+	"delivery.interrupted",
+	"assertion.completed",
 ]);
 export function subscribeRun(
 	runId: string,
@@ -177,23 +193,43 @@ export function subscribeRun(
 	base = "",
 	createSource: (url: string) => RunEventSource = (url) => new EventSource(url),
 ): () => void {
-	const source = createSource(`${base}/api/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(after)}`);
+	const source = createSource(
+		`${base}/api/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(after)}`,
+	);
 	source.onopen = () => callbacks.open();
 	source.onerror = () => callbacks.error();
 	source.onmessage = (message) => {
 		try {
 			const value: unknown = JSON.parse(message.data);
-			if (!value || typeof value !== "object" ||
-				!("cursor" in value) || typeof value.cursor !== "string" || !/^\d+$/.test(value.cursor) ||
-				!("runId" in value) || value.runId !== runId ||
-				!("type" in value) || typeof value.type !== "string" || !eventTypes.has(value.type) ||
-				!("payload" in value) || !value.payload || typeof value.payload !== "object" || Array.isArray(value.payload) ||
-				!("createdAt" in value) || typeof value.createdAt !== "string") return;
+			if (
+				!value ||
+				typeof value !== "object" ||
+				!("cursor" in value) ||
+				typeof value.cursor !== "string" ||
+				!/^\d+$/.test(value.cursor) ||
+				!("runId" in value) ||
+				value.runId !== runId ||
+				!("type" in value) ||
+				typeof value.type !== "string" ||
+				!eventTypes.has(value.type) ||
+				!("payload" in value) ||
+				!value.payload ||
+				typeof value.payload !== "object" ||
+				Array.isArray(value.payload) ||
+				!("createdAt" in value) ||
+				typeof value.createdAt !== "string"
+			)
+				return;
 			callbacks.event(value as RunEvent);
 		} catch {
 			callbacks.error();
 		}
 	};
 	// Keep one native EventSource so reconnects preserve Last-Event-ID.
-	return () => { source.onopen = null; source.onerror = null; source.onmessage = null; source.close(); };
+	return () => {
+		source.onopen = null;
+		source.onerror = null;
+		source.onmessage = null;
+		source.close();
+	};
 }

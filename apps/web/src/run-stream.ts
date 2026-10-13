@@ -1,6 +1,11 @@
 import type { RunEvent, RunResponse } from "@webhook-tester/contracts";
 
-export type StreamConnection = "loading" | "connecting" | "live" | "reconnecting" | "complete";
+export type StreamConnection =
+	| "loading"
+	| "connecting"
+	| "live"
+	| "reconnecting"
+	| "complete";
 export interface RunStreamState {
 	run: RunResponse | null;
 	error: string | null;
@@ -14,11 +19,20 @@ export interface StreamCallbacks {
 }
 export interface RunStreamDependencies {
 	load(runId: string, signal: AbortSignal): Promise<RunResponse>;
-	subscribe(runId: string, after: string, callbacks: StreamCallbacks): () => void;
+	subscribe(
+		runId: string,
+		after: string,
+		callbacks: StreamCallbacks,
+	): () => void;
 	retryMs?: number;
 }
 export class RunStreamController {
-	state: RunStreamState = { run: null, error: null, connection: "loading", refreshing: false };
+	state: RunStreamState = {
+		run: null,
+		error: null,
+		connection: "loading",
+		refreshing: false,
+	};
 	private readonly abort = new AbortController();
 	private unsubscribe: (() => void) | undefined;
 	private retry: ReturnType<typeof setTimeout> | undefined;
@@ -31,7 +45,9 @@ export class RunStreamController {
 		private readonly dependencies: RunStreamDependencies,
 		private readonly change: (state: RunStreamState) => void,
 	) {}
-	start() { this.refresh(); }
+	start() {
+		this.refresh();
+	}
 	refresh() {
 		if (this.stopped) return;
 		clearTimeout(this.retry);
@@ -69,30 +85,41 @@ export class RunStreamController {
 					this.update({ connection: "complete" });
 				} else if (!this.unsubscribe) {
 					this.update({ connection: "connecting" });
-					this.unsubscribe = this.dependencies.subscribe(this.runId, run.eventCursor, {
-						open: () => {
-							if (this.stopped) return;
-							this.update({ connection: "live" });
-							this.refresh();
+					this.unsubscribe = this.dependencies.subscribe(
+						this.runId,
+						run.eventCursor,
+						{
+							open: () => {
+								if (this.stopped) return;
+								this.update({ connection: "live" });
+								this.refresh();
+							},
+							error: () => {
+								if (this.stopped) return;
+								this.update({ connection: "reconnecting" });
+								this.refresh();
+							},
+							event: (event) => {
+								if (
+									this.stopped ||
+									event.runId !== this.runId ||
+									!/^\d+$/.test(event.cursor)
+								)
+									return;
+								const next = BigInt(event.cursor);
+								if (next <= this.received) return;
+								this.received = next;
+								this.refresh();
+							},
 						},
-						error: () => {
-							if (this.stopped) return;
-							this.update({ connection: "reconnecting" });
-							this.refresh();
-						},
-						event: (event) => {
-							if (this.stopped || event.runId !== this.runId || !/^\d+$/.test(event.cursor)) return;
-							const next = BigInt(event.cursor);
-							if (next <= this.received) return;
-							this.received = next;
-							this.refresh();
-						},
-					});
+					);
 				}
 			}
 		} catch (reason) {
 			if (this.stopped) return;
-			this.update({ error: reason instanceof Error ? reason.message : "Unable to load run." });
+			this.update({
+				error: reason instanceof Error ? reason.message : "Unable to load run.",
+			});
 			// Receiving a cursor does not imply that its coherent snapshot loaded.
 			// Retain the invalidation and retry even if SSE replays only duplicates.
 			this.pending = true;

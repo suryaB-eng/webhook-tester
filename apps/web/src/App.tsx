@@ -58,7 +58,11 @@ export function App() {
 	let comparison: { leftId: string; rightId: string } | null = null;
 	try {
 		const match = /^#\/compare\/([^/]+)\/([^/]+)$/.exec(hash);
-		if (match?.[1] && match[2]) comparison = { leftId: decodeURIComponent(match[1]), rightId: decodeURIComponent(match[2]) };
+		if (match?.[1] && match[2])
+			comparison = {
+				leftId: decodeURIComponent(match[1]),
+				rightId: decodeURIComponent(match[2]),
+			};
 	} catch {
 		/* Invalid route returns to the scenario list. */
 	}
@@ -83,7 +87,11 @@ export function App() {
 			</aside>
 			<main>
 				{comparison ? (
-					<RunCompare key={`${comparison.leftId}:${comparison.rightId}`} leftId={comparison.leftId} rightId={comparison.rightId} />
+					<RunCompare
+						key={`${comparison.leftId}:${comparison.rightId}`}
+						leftId={comparison.leftId}
+						rightId={comparison.rightId}
+					/>
 				) : history ? (
 					<RunHistory />
 				) : runId ? (

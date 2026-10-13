@@ -11,7 +11,7 @@ COPY apps/worker/package.json apps/worker/package.json
 COPY apps/web/package.json apps/web/package.json
 RUN npm ci --no-audit --no-fund
 
-COPY tsconfig.base.json ./
+COPY tsconfig.base.json LICENSE ./
 COPY packages ./packages
 COPY apps ./apps
 RUN npm run build

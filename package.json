@@ -1,39 +1,47 @@
 {
-  "name": "webhook-tester",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "packageManager": "npm@10.9.2",
-  "engines": {
-    "node": ">=22.14.0"
-  },
-  "workspaces": [
-    "packages/contracts",
-    "packages/runner",
-    "packages/db",
-    "apps/api",
-    "apps/demo-target",
-    "apps/worker",
-    "apps/web"
-  ],
-  "scripts": {
-    "dev:api": "npm run dev -w @webhook-tester/api",
-    "dev:web": "npm run dev -w @webhook-tester/web",
-    "lint": "biome lint .",
-    "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run test --workspaces",
-    "build": "npm run build --workspaces",
-    "build:shared": "npm run build -w @webhook-tester/contracts && npm run build -w @webhook-tester/runner && npm run build -w @webhook-tester/db",
-    "pretypecheck": "npm run build:shared",
-    "pretest": "npm run build:shared",
-    "migrate": "npm run build:shared && node --env-file-if-exists=.env packages/db/dist/migrate.js",
-    "dev:demo": "npm run build:shared && npm run dev -w @webhook-tester/demo-target",
-    "dev:worker": "npm run build:shared && npm run dev -w @webhook-tester/worker"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.5.13",
-    "@types/node": "26.6.0",
-    "tsx": "4.23.13",
-    "typescript": "7.0.2"
-  }
+	"name": "webhook-tester",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"packageManager": "npm@10.9.2",
+	"engines": {
+		"node": ">=22.14.0"
+	},
+	"workspaces": [
+		"packages/contracts",
+		"packages/runner",
+		"packages/db",
+		"apps/api",
+		"apps/demo-target",
+		"apps/worker",
+		"apps/web"
+	],
+	"scripts": {
+		"dev:api": "npm run dev -w @webhook-tester/api",
+		"dev:web": "npm run dev -w @webhook-tester/web",
+		"lint": "biome lint .",
+		"typecheck": "npm run typecheck --workspaces && tsc --project tests/e2e/tsconfig.json",
+		"test": "node --test scripts/test.test.mjs && node scripts/test.mjs unit && node scripts/test.mjs integration",
+		"build": "npm run build --workspaces",
+		"build:shared": "npm run build -w @webhook-tester/contracts && npm run build -w @webhook-tester/runner && npm run build -w @webhook-tester/db",
+		"pretypecheck": "npm run build:shared",
+		"pretest": "npm run build:shared",
+		"migrate": "npm run build:shared && node --env-file-if-exists=.env packages/db/dist/migrate.js",
+		"dev:demo": "npm run build:shared && npm run dev -w @webhook-tester/demo-target",
+		"dev:worker": "npm run build:shared && npm run dev -w @webhook-tester/worker",
+		"format:check": "biome format .",
+		"test:unit": "node --test scripts/test.test.mjs && node scripts/test.mjs unit",
+		"test:integration": "node scripts/test.mjs integration",
+		"pretest:unit": "npm run build:shared",
+		"pretest:integration": "npm run build:shared",
+		"test:e2e": "playwright test",
+		"ci:local": "npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.13",
+		"@playwright/test": "1.63.0",
+		"@types/node": "26.6.0",
+		"tsx": "4.23.13",
+		"typescript": "7.0.2"
+	}
 }

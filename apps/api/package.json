@@ -11,9 +11,9 @@
 		"build": "tsc -p tsconfig.build.json"
 	},
 	"dependencies": {
-		"fastify": "5.12.4",
 		"@webhook-tester/contracts": "0.1.0",
 		"@webhook-tester/db": "0.1.0",
+		"fastify": "5.12.5",
 		"pg": "8.23.0"
 	}
 }

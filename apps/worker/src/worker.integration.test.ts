@@ -1120,76 +1120,127 @@ test("sequential worker persists real HTTP and PostgreSQL run results", {
 		},
 	);
 
-	await t.test("interrupted finalization is bounded when its run row is locked", async () => {
-		const runId = await enqueue(await save(await seedDefinition()));
-		const workerId = randomUUID();
-		await adminPool.query("UPDATE runs SET status='running',started_at=now() WHERE id=$1", [runId]);
-		await adminPool.query("UPDATE jobs SET status='running',worker_id=$2 WHERE run_id=$1", [runId,workerId]);
-		const barrier = await adminPool.connect();
-		let unlocked = false;
-		let releasePromise: Promise<void> | undefined;
-		const unlock = () => {
-			releasePromise ??= barrier.query("COMMIT").then(() => { unlocked = true; });
-			return releasePromise;
-		};
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await barrier.query("BEGIN");
-			await barrier.query("SELECT id FROM runs WHERE id=$1 FOR UPDATE", [runId]);
-			timer = setTimeout(() => { void unlock().catch(() => {}); }, 3500);
-			await assert.rejects(finishInterrupted(appPool,runId,workerId,"Ownership lost"), /timeout|timed out/i);
-			assert.equal(unlocked,false,"finalization must return without waiting indefinitely on the row lock");
-			clearTimeout(timer);
-			await unlock();
-			assert.equal(await runWorkerOnce(options()),"idle");
-			assert.equal((await read(runId)).status,"interrupted");
-		} finally {
-			if (timer) clearTimeout(timer);
-			try { await unlock(); } finally { barrier.release(); }
-		}
-	});
-	await t.test("an ownership probe timeout retains the returned but unsaved response fixtures", async () => {
-		const barrier = await adminPool.connect();
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		let began = false;
-		let released: Promise<void> | undefined;
-		const unlock = () => {
-			released ??= (began ? barrier.query("COMMIT") : Promise.resolve()).then(() => {});
-			return released;
-		};
-		try {
-			await withHttpServer(async (request,response) => {
-				const chunks: Buffer[] = [];
-				for await (const chunk of request) chunks.push(Buffer.from(chunk));
-				const target = await fetch(`${base}/webhooks/corrected`, {
-					method: "POST",
-					headers: { "content-type": "application/json", "x-webhook-lab-run-id": String(request.headers["x-webhook-lab-run-id"]) },
-					body: Buffer.concat(chunks).toString("utf8"),
+	await t.test(
+		"interrupted finalization is bounded when its run row is locked",
+		async () => {
+			const runId = await enqueue(await save(await seedDefinition()));
+			const workerId = randomUUID();
+			await adminPool.query(
+				"UPDATE runs SET status='running',started_at=now() WHERE id=$1",
+				[runId],
+			);
+			await adminPool.query(
+				"UPDATE jobs SET status='running',worker_id=$2 WHERE run_id=$1",
+				[runId, workerId],
+			);
+			const barrier = await adminPool.connect();
+			let unlocked = false;
+			let releasePromise: Promise<void> | undefined;
+			const unlock = () => {
+				releasePromise ??= barrier.query("COMMIT").then(() => {
+					unlocked = true;
 				});
-				const body = await target.text();
-				assert.equal(target.status,200);
+				return releasePromise;
+			};
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
 				await barrier.query("BEGIN");
-				began = true;
-				await barrier.query("LOCK TABLE jobs IN ACCESS EXCLUSIVE MODE");
-				timer = setTimeout(() => { void unlock().catch(() => {}); },3500);
-				response.writeHead(200);
-				response.end(body);
-			}, async (endpoint) => {
-				const runId = await enqueue(await save(await seedDefinition()));
-				assert.equal(await runWorkerOnce(options(alternate(endpoint))),"processed");
+				await barrier.query("SELECT id FROM runs WHERE id=$1 FOR UPDATE", [
+					runId,
+				]);
+				timer = setTimeout(() => {
+					void unlock().catch(() => {});
+				}, 3500);
+				await assert.rejects(
+					finishInterrupted(appPool, runId, workerId, "Ownership lost"),
+					/timeout|timed out/i,
+				);
+				assert.equal(
+					unlocked,
+					false,
+					"finalization must return without waiting indefinitely on the row lock",
+				);
+				clearTimeout(timer);
 				await unlock();
-				const run = await read(runId);
-				assert.equal(run.status,"error");
-				assert.match(run.error ?? "",/ownership probe|timeout/i);
-				assert.equal(run.deliveries[0]?.httpStatus,null);
-				const effects = await queryPool.query("SELECT (SELECT count(*)::int FROM fulfillments WHERE run_id=$1) AS fulfillments,(SELECT quantity FROM inventory WHERE run_id=$1) AS stock",[runId]);
-				assert.deepEqual(effects.rows[0],{fulfillments:1,stock:9});
-			});
-		} finally {
-			if (timer) clearTimeout(timer);
-			try { await unlock(); } finally { barrier.release(); }
-		}
-	});
+				assert.equal(await runWorkerOnce(options()), "idle");
+				assert.equal((await read(runId)).status, "interrupted");
+			} finally {
+				if (timer) clearTimeout(timer);
+				try {
+					await unlock();
+				} finally {
+					barrier.release();
+				}
+			}
+		},
+	);
+	await t.test(
+		"an ownership probe timeout retains the returned but unsaved response fixtures",
+		async () => {
+			const barrier = await adminPool.connect();
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let began = false;
+			let released: Promise<void> | undefined;
+			const unlock = () => {
+				released ??= (began ? barrier.query("COMMIT") : Promise.resolve()).then(
+					() => {},
+				);
+				return released;
+			};
+			try {
+				await withHttpServer(
+					async (request, response) => {
+						const chunks: Buffer[] = [];
+						for await (const chunk of request) chunks.push(Buffer.from(chunk));
+						const target = await fetch(`${base}/webhooks/corrected`, {
+							method: "POST",
+							headers: {
+								"content-type": "application/json",
+								"x-webhook-lab-run-id": String(
+									request.headers["x-webhook-lab-run-id"],
+								),
+							},
+							body: Buffer.concat(chunks).toString("utf8"),
+						});
+						const body = await target.text();
+						assert.equal(target.status, 200);
+						await barrier.query("BEGIN");
+						began = true;
+						await barrier.query("LOCK TABLE jobs IN ACCESS EXCLUSIVE MODE");
+						timer = setTimeout(() => {
+							void unlock().catch(() => {});
+						}, 3500);
+						response.writeHead(200);
+						response.end(body);
+					},
+					async (endpoint) => {
+						const runId = await enqueue(await save(await seedDefinition()));
+						assert.equal(
+							await runWorkerOnce(options(alternate(endpoint))),
+							"processed",
+						);
+						await unlock();
+						const run = await read(runId);
+						assert.equal(run.status, "error");
+						assert.match(run.error ?? "", /ownership probe|timeout/i);
+						assert.equal(run.deliveries[0]?.httpStatus, null);
+						const effects = await queryPool.query(
+							"SELECT (SELECT count(*)::int FROM fulfillments WHERE run_id=$1) AS fulfillments,(SELECT quantity FROM inventory WHERE run_id=$1) AS stock",
+							[runId],
+						);
+						assert.deepEqual(effects.rows[0], { fulfillments: 1, stock: 9 });
+					},
+				);
+			} finally {
+				if (timer) clearTimeout(timer);
+				try {
+					await unlock();
+				} finally {
+					barrier.release();
+				}
+			}
+		},
+	);
 	await t.test("idle worker does not create or dispatch a run", async () => {
 		assert.equal(await runWorkerOnce(options()), "idle");
 	});

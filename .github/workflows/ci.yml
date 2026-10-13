@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:superuser_local_only@127.0.0.1:55433/webhook_tester_test_admin
+      TEST_APP_DATABASE_URL: postgresql://webhook_tester_app:app_local_only@127.0.0.1:55433/webhook_tester
+      TEST_TARGET_OWNER_DATABASE_URL: postgresql://demo_target_owner:target_owner_local_only@127.0.0.1:55433/demo_target
+      TEST_TARGET_APP_DATABASE_URL: postgresql://demo_target_app:target_app_local_only@127.0.0.1:55433/demo_target
+      TEST_TARGET_FIXTURE_DATABASE_URL: postgresql://demo_target_fixture:fixture_local_only@127.0.0.1:55433/demo_target
+      TEST_TARGET_QUERY_DATABASE_URL: postgresql://demo_target_query:query_local_only@127.0.0.1:55433/demo_target
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start isolated integration database
+        run: docker compose -p webhook-tester-ci-host -f compose.test.yaml up -d --wait
+
+      - name: Migrate isolated integration database
+        env:
+          ADMIN_DATABASE_URL: ${{ env.TEST_ADMIN_DATABASE_URL }}
+          APP_DATABASE_URL: ${{ env.TEST_APP_DATABASE_URL }}
+          TARGET_OWNER_DATABASE_URL: ${{ env.TEST_TARGET_OWNER_DATABASE_URL }}
+          TARGET_APP_DATABASE_URL: ${{ env.TEST_TARGET_APP_DATABASE_URL }}
+          TARGET_FIXTURE_DATABASE_URL: ${{ env.TEST_TARGET_FIXTURE_DATABASE_URL }}
+          TARGET_QUERY_DATABASE_URL: ${{ env.TEST_TARGET_QUERY_DATABASE_URL }}
+        run: npm run migrate
+
+      - name: Check formatting, lint, types, tests, and builds
+        run: npm run ci:local
+
+      - name: Start isolated browser stack
+        run: docker compose -p webhook-tester-ci-e2e -f compose.yaml -f compose.e2e.yaml up --build -d --wait
+
+      - name: Run browser workflows
+        run: npm run test:e2e -- --workers=1
+
+      - name: Capture failed service logs
+        if: failure()
+        run: |
+          mkdir -p test-results
+          docker compose -p webhook-tester-ci-host -f compose.test.yaml logs --no-color > test-results/compose-host.log 2>&1 || true
+          docker compose -p webhook-tester-ci-e2e -f compose.yaml -f compose.e2e.yaml logs --no-color > test-results/compose-e2e.log 2>&1 || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failure-diagnostics
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop isolated browser stack and remove its volume
+        if: always()
+        run: docker compose -p webhook-tester-ci-e2e -f compose.yaml -f compose.e2e.yaml down --volumes --remove-orphans
+
+      - name: Stop isolated integration database
+        if: always()
+        run: docker compose -p webhook-tester-ci-host -f compose.test.yaml down --remove-orphans

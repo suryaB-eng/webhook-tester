@@ -13,3 +13,5 @@ playwright-report/
 *.tsbuildinfo
 .vscode/
 .idea/
+.agents/
+.codex/

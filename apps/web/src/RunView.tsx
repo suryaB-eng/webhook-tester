@@ -1,4 +1,8 @@
-import type { JsonScalar, RunEvent, RunResponse } from "@webhook-tester/contracts";
+import type {
+	JsonScalar,
+	RunEvent,
+	RunResponse,
+} from "@webhook-tester/contracts";
 import { useState } from "react";
 import { useRunStream } from "./useRunStream";
 import { RerunControls } from "./RerunControls";
@@ -10,11 +14,33 @@ function scalar(value: JsonScalar) {
 	return JSON.stringify(value);
 }
 
-export function RunLineage({ sourceRunId, targetOverride }: Pick<RunResponse, "sourceRunId" | "targetOverride">) {
-	return <>
-		{sourceRunId && <div><dt>Source run</dt><dd><a className="table-link mono" href={`#/runs/${encodeURIComponent(sourceRunId)}`}>{sourceRunId}</a></dd></div>}
-		{targetOverride && <div><dt>Target override</dt><dd className="mono">{targetOverride}</dd></div>}
-	</>;
+export function RunLineage({
+	sourceRunId,
+	targetOverride,
+}: Pick<RunResponse, "sourceRunId" | "targetOverride">) {
+	return (
+		<>
+			{sourceRunId && (
+				<div>
+					<dt>Source run</dt>
+					<dd>
+						<a
+							className="table-link mono"
+							href={`#/runs/${encodeURIComponent(sourceRunId)}`}
+						>
+							{sourceRunId}
+						</a>
+					</dd>
+				</div>
+			)}
+			{targetOverride && (
+				<div>
+					<dt>Target override</dt>
+					<dd className="mono">{targetOverride}</dd>
+				</div>
+			)}
+		</>
+	);
 }
 
 const eventLabels: Record<RunEvent["type"], string> = {
@@ -29,12 +55,22 @@ const eventLabels: Record<RunEvent["type"], string> = {
 	"assertion.completed": "Assertion completed",
 };
 
-export function RunTimeline({ events, onSelectDelivery }: { events: RunEvent[]; onSelectDelivery?: (deliveryId: string) => void }) {
+export function RunTimeline({
+	events,
+	onSelectDelivery,
+}: {
+	events: RunEvent[];
+	onSelectDelivery?: (deliveryId: string) => void;
+}) {
 	return (
 		<section className="panel" aria-labelledby="timeline-title">
 			<h2 id="timeline-title">Activity</h2>
-			<p className="section-help">Saved run activity in the order it was recorded.</p>
-			{events.length === 0 ? <p className="section-help">No activity recorded yet.</p> : (
+			<p className="section-help">
+				Saved run activity in the order it was recorded.
+			</p>
+			{events.length === 0 ? (
+				<p className="section-help">No activity recorded yet.</p>
+			) : (
 				<ol className="run-timeline">
 					{events.map((event) => {
 						const payload = event.payload;
@@ -43,29 +79,49 @@ export function RunTimeline({ events, onSelectDelivery }: { events: RunEvent[]; 
 							<li key={event.cursor}>
 								<div className="timeline-heading">
 									<strong>{eventLabels[event.type]}</strong>
-									<time dateTime={event.createdAt}>{time(event.createdAt)}</time>
+									<time dateTime={event.createdAt}>
+										{time(event.createdAt)}
+									</time>
 								</div>
 								<div className="timeline-detail">
-									{deliveryId && (onSelectDelivery ? (
-										<button type="button" className="delivery-select mono" onClick={() => onSelectDelivery(deliveryId)}>{deliveryId}</button>
-									) : <span className="mono">{deliveryId}</span>)}
+									{deliveryId &&
+										(onSelectDelivery ? (
+											<button
+												type="button"
+												className="delivery-select mono"
+												onClick={() => onSelectDelivery(deliveryId)}
+											>
+												{deliveryId}
+											</button>
+										) : (
+											<span className="mono">{deliveryId}</span>
+										))}
 									{payload.phase && <span>{payload.phase}</span>}
 									{payload.status && <span>{payload.status}</span>}
 									{payload.outcome && <span>{payload.outcome}</span>}
-									{payload.httpStatus != null && <span>HTTP {payload.httpStatus}</span>}
-									{payload.assertionName && <span>{payload.assertionName}</span>}
-									{payload.assertionStatus && <span>{payload.assertionStatus}</span>}
+									{payload.httpStatus != null && (
+										<span>HTTP {payload.httpStatus}</span>
+									)}
+									{payload.assertionName && (
+										<span>{payload.assertionName}</span>
+									)}
+									{payload.assertionStatus && (
+										<span>{payload.assertionStatus}</span>
+									)}
 								</div>
 								{event.type === "assertion.completed" && (
 									<p className="section-help mono">
-										Expected {JSON.stringify(payload.expected)}; {payload.assertionStatus === "error" ? "Actual not recorded" : `actual ${JSON.stringify(payload.actual)}`}
+										Expected {JSON.stringify(payload.expected)};{" "}
+										{payload.assertionStatus === "error"
+											? "Actual not recorded"
+											: `actual ${JSON.stringify(payload.actual)}`}
 									</p>
 								)}
 							</li>
-							);
-						})}
-					</ol>
-				)}
+						);
+					})}
+				</ol>
+			)}
 		</section>
 	);
 }
@@ -82,15 +138,13 @@ export function RunView({ runId }: { runId: string }) {
 			<a className="back-link" href="#/scenarios">
 				← Scenarios
 			</a>
-			<a className="back-link run-history-link" href="#/runs">Run history</a>
+			<a className="back-link run-history-link" href="#/runs">
+				Run history
+			</a>
 			{error && (
 				<div className="notice error" role="alert">
 					<p>{error}</p>
-					<button
-						type="button"
-						onClick={refresh}
-						disabled={refreshing}
-					>
+					<button type="button" onClick={refresh} disabled={refreshing}>
 						Try again
 					</button>
 				</div>
@@ -111,15 +165,30 @@ export function RunView({ runId }: { runId: string }) {
 						</span>
 					</header>
 					<div className="run-live-controls">
-						<p role="status" aria-live="polite" className={`stream-state stream-state-${connection}`}>
-							{connection === "complete" ? "Saved run complete" : connection === "live" ? "Live updates connected" : connection === "reconnecting" ? "Reconnecting to live updates..." : "Connecting to live updates..."}
+						<p
+							role="status"
+							aria-live="polite"
+							className={`stream-state stream-state-${connection}`}
+						>
+							{connection === "complete"
+								? "Saved run complete"
+								: connection === "live"
+									? "Live updates connected"
+									: connection === "reconnecting"
+										? "Reconnecting to live updates..."
+										: "Connecting to live updates..."}
 							{refreshing && " Updating saved results..."}
 						</p>
-						<button type="button" onClick={refresh} disabled={refreshing}>Refresh results</button>
+						<button type="button" onClick={refresh} disabled={refreshing}>
+							Refresh results
+						</button>
 					</div>
 					<section className="panel run-summary" aria-label="Run details">
 						<dl>
-							<RunLineage sourceRunId={run.sourceRunId} targetOverride={run.targetOverride} />
+							<RunLineage
+								sourceRunId={run.sourceRunId}
+								targetOverride={run.targetOverride}
+							/>
 							<div>
 								<dt>Run ID</dt>
 								<dd className="mono">{run.id}</dd>

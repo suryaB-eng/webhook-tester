@@ -5,48 +5,130 @@ import { launchRun, loadScenarios, loadTargets } from "./api.js";
 import * as api from "./api.js";
 
 test("run history preserves the opaque cursor and returns bounded server pages", async (t) => {
-	assert.equal(typeof api.loadRunHistory, "function", "run history can be loaded from the server");
+	assert.equal(
+		typeof api.loadRunHistory,
+		"function",
+		"run history can be loaded from the server",
+	);
 	const requests: string[] = [];
-	const page = { runs: [{ id: "saved/run", scenarioName: "Saved snapshot", status: "passed", phase: "completed", targetSnapshot: { id: "demo", name: "Demo" }, createdAt: "2026-10-12T12:00:00Z", startedAt: null, completedAt: "2026-10-12T12:00:01Z", sourceRunId: null, targetOverride: null }], nextCursor: "opaque+/= cursor" };
+	const page = {
+		runs: [
+			{
+				id: "saved/run",
+				scenarioName: "Saved snapshot",
+				status: "passed",
+				phase: "completed",
+				targetSnapshot: { id: "demo", name: "Demo" },
+				createdAt: "2026-10-12T12:00:00Z",
+				startedAt: null,
+				completedAt: "2026-10-12T12:00:01Z",
+				sourceRunId: null,
+				targetOverride: null,
+			},
+		],
+		nextCursor: "opaque+/= cursor",
+	};
 	const server = createServer((request, response) => {
 		requests.push(`${request.method} ${request.url}`);
 		response.setHeader("Content-Type", "application/json");
-		if (request.url?.includes("before=invalid")) response.writeHead(400).end(JSON.stringify({ error: "Invalid history cursor" }));
+		if (request.url?.includes("before=invalid"))
+			response
+				.writeHead(400)
+				.end(JSON.stringify({ error: "Invalid history cursor" }));
 		else response.end(JSON.stringify(page));
 	});
-	t.after(() => new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); }));
+	t.after(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+				server.closeAllConnections();
+			}),
+	);
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	assert.ok(address && typeof address !== "string");
 	const base = `http://127.0.0.1:${address.port}`;
 	assert.deepEqual(await api.loadRunHistory(undefined, undefined, base), page);
-	assert.deepEqual(await api.loadRunHistory(page.nextCursor, undefined, base), page);
-	await assert.rejects(api.loadRunHistory("invalid", undefined, base), (error: unknown) => error instanceof api.ApiError && error.status === 400 && error.message === "Invalid history cursor");
-	assert.deepEqual(requests, ["GET /api/runs?limit=20", "GET /api/runs?limit=20&before=opaque%2B%2F%3D%20cursor", "GET /api/runs?limit=20&before=invalid"]);
-	await assert.rejects(api.loadRunHistory(undefined, AbortSignal.abort(), base));
+	assert.deepEqual(
+		await api.loadRunHistory(page.nextCursor, undefined, base),
+		page,
+	);
+	await assert.rejects(
+		api.loadRunHistory("invalid", undefined, base),
+		(error: unknown) =>
+			error instanceof api.ApiError &&
+			error.status === 400 &&
+			error.message === "Invalid history cursor",
+	);
+	assert.deepEqual(requests, [
+		"GET /api/runs?limit=20",
+		"GET /api/runs?limit=20&before=opaque%2B%2F%3D%20cursor",
+		"GET /api/runs?limit=20&before=invalid",
+	]);
+	await assert.rejects(
+		api.loadRunHistory(undefined, AbortSignal.abort(), base),
+	);
 });
 
 test("rerun posts only the target override to the encoded source route and preserves terminal conflicts", async (t) => {
 	assert.equal(typeof api.rerunRun, "function", "saved snapshots can be rerun");
-	const requests: { method: string | undefined; url: string | undefined; body: unknown; contentType: string | undefined }[] = [];
+	const requests: {
+		method: string | undefined;
+		url: string | undefined;
+		body: unknown;
+		contentType: string | undefined;
+	}[] = [];
 	const server = createServer(async (request, response) => {
 		let source = "";
 		for await (const chunk of request) source += chunk;
-		requests.push({ method: request.method, url: request.url, body: JSON.parse(source), contentType: request.headers["content-type"] });
+		requests.push({
+			method: request.method,
+			url: request.url,
+			body: JSON.parse(source),
+			contentType: request.headers["content-type"],
+		});
 		response.setHeader("Content-Type", "application/json");
-		if (request.url?.includes("active")) response.writeHead(409).end(JSON.stringify({ error: "Run is not terminal" }));
+		if (request.url?.includes("active"))
+			response
+				.writeHead(409)
+				.end(JSON.stringify({ error: "Run is not terminal" }));
 		else response.writeHead(202).end(JSON.stringify({ runId: "new-run" }));
 	});
-	t.after(() => new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); }));
+	t.after(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+				server.closeAllConnections();
+			}),
+	);
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	assert.ok(address && typeof address !== "string");
 	const base = `http://127.0.0.1:${address.port}`;
-	assert.equal(await api.rerunRun("source/run ?", "demo-corrected", undefined, base), "new-run");
-	await assert.rejects(api.rerunRun("active", "demo", undefined, base), (error: unknown) => error instanceof api.ApiError && error.status === 409 && error.message === "Run is not terminal");
+	assert.equal(
+		await api.rerunRun("source/run ?", "demo-corrected", undefined, base),
+		"new-run",
+	);
+	await assert.rejects(
+		api.rerunRun("active", "demo", undefined, base),
+		(error: unknown) =>
+			error instanceof api.ApiError &&
+			error.status === 409 &&
+			error.message === "Run is not terminal",
+	);
 	assert.deepEqual(requests, [
-		{ method: "POST", url: "/api/runs/source%2Frun%20%3F/rerun", body: { targetId: "demo-corrected" }, contentType: "application/json" },
-		{ method: "POST", url: "/api/runs/active/rerun", body: { targetId: "demo" }, contentType: "application/json" },
+		{
+			method: "POST",
+			url: "/api/runs/source%2Frun%20%3F/rerun",
+			body: { targetId: "demo-corrected" },
+			contentType: "application/json",
+		},
+		{
+			method: "POST",
+			url: "/api/runs/active/rerun",
+			body: { targetId: "demo" },
+			contentType: "application/json",
+		},
 	]);
 });
 
@@ -105,25 +187,21 @@ test("scenario CRUD uses JSON requests and preserves revision conflict details",
 			request.method === "PUT" &&
 			seen.filter((entry) => entry.method === "PUT").length === 2
 		) {
-			response
-				.writeHead(409)
-				.end(
-					JSON.stringify({
-						error: "Scenario has changed",
-						currentRevision: 3,
-						issues: [{ path: "name", message: "Review name" }],
-					}),
-				);
+			response.writeHead(409).end(
+				JSON.stringify({
+					error: "Scenario has changed",
+					currentRevision: 3,
+					issues: [{ path: "name", message: "Review name" }],
+				}),
+			);
 		} else {
-			response
-				.writeHead(request.method === "POST" ? 201 : 200)
-				.end(
-					JSON.stringify({
-						id: request.url?.endsWith("duplicate") ? "copy" : "saved",
-						revision: request.method === "PUT" ? 2 : 1,
-						document,
-					}),
-				);
+			response.writeHead(request.method === "POST" ? 201 : 200).end(
+				JSON.stringify({
+					id: request.url?.endsWith("duplicate") ? "copy" : "saved",
+					revision: request.method === "PUT" ? 2 : 1,
+					document,
+				}),
+			);
 		}
 	});
 	t.after(
@@ -192,7 +270,11 @@ test("scenario CRUD uses JSON requests and preserves revision conflict details",
 });
 
 test("scenario launch sends JSON and saved run reads support refresh and HTTP errors", async (t) => {
-	assert.equal(typeof api.loadRun, "function", "saved run snapshots can be loaded independently of the stream");
+	assert.equal(
+		typeof api.loadRun,
+		"function",
+		"saved run snapshots can be loaded independently of the stream",
+	);
 	let reads = 0;
 	const requests: {
 		method: string | undefined;
@@ -258,7 +340,8 @@ test("scenario launch sends JSON and saved run reads support refresh and HTTP er
 	const id = await launchRun("duplicate", "demo-corrected", undefined, base);
 	assert.equal(id, "saved-run");
 	const statuses = [];
-	for (let read = 0; read < 3; read++) statuses.push((await api.loadRun(id, undefined, base)).status);
+	for (let read = 0; read < 3; read++)
+		statuses.push((await api.loadRun(id, undefined, base)).status);
 	assert.deepEqual(statuses, ["queued", "running", "passed"]);
 	assert.equal(reads, 3);
 	assert.deepEqual(
@@ -274,37 +357,89 @@ test("scenario launch sends JSON and saved run reads support refresh and HTTP er
 		},
 	);
 	assert.equal((await api.loadRun(id, undefined, base)).id, "saved-run");
-	await assert.rejects(api.loadRun("missing", undefined, base), /Run not found/);
+	await assert.rejects(
+		api.loadRun("missing", undefined, base),
+		/Run not found/,
+	);
 	await assert.rejects(api.loadRun(id, AbortSignal.abort(), base));
 });
 
 test("run SSE uses the saved decimal cursor and delivers only valid events for this run", () => {
-	assert.equal(typeof api.subscribeRun, "function", "run events are subscribed through native EventSource");
+	assert.equal(
+		typeof api.subscribeRun,
+		"function",
+		"run events are subscribed through native EventSource",
+	);
 	let url = "";
 	let closed = false;
 	const source = {
 		onopen: null as ((event: Event) => unknown) | null,
 		onerror: null as ((event: Event) => unknown) | null,
 		onmessage: null as ((event: MessageEvent) => unknown) | null,
-		close() { closed = true; },
+		close() {
+			closed = true;
+		},
 	};
 	const events: string[] = [];
 	let opens = 0;
 	let errors = 0;
-	const unsubscribe = api.subscribeRun("run/id", "9007199254740993", {
-		event: (event) => events.push(event.cursor), open: () => { opens++; }, error: () => { errors++; },
-	}, "", (value) => { url = value; return source; });
+	const unsubscribe = api.subscribeRun(
+		"run/id",
+		"9007199254740993",
+		{
+			event: (event) => events.push(event.cursor),
+			open: () => {
+				opens++;
+			},
+			error: () => {
+				errors++;
+			},
+		},
+		"",
+		(value) => {
+			url = value;
+			return source;
+		},
+	);
 	assert.equal(url, "/api/runs/run%2Fid/events?after=9007199254740993");
 	source.onopen?.(new Event("open"));
-	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: "9007199254740994", runId: "run/id", type: "run.phase", payload: { phase: "asserting" }, createdAt: "2026-10-12T12:00:00.000Z" }) }));
+	source.onmessage?.(
+		new MessageEvent("message", {
+			data: JSON.stringify({
+				cursor: "9007199254740994",
+				runId: "run/id",
+				type: "run.phase",
+				payload: { phase: "asserting" },
+				createdAt: "2026-10-12T12:00:00.000Z",
+			}),
+		}),
+	);
 	source.onmessage?.(new MessageEvent("message", { data: "invalid json" }));
-	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: 4, runId: "run/id", type: "run.phase" }) }));
-	source.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ cursor: "5", runId: "other", type: "run.phase", payload: {}, createdAt: "2026-10-12T12:00:00.000Z" }) }));
+	source.onmessage?.(
+		new MessageEvent("message", {
+			data: JSON.stringify({ cursor: 4, runId: "run/id", type: "run.phase" }),
+		}),
+	);
+	source.onmessage?.(
+		new MessageEvent("message", {
+			data: JSON.stringify({
+				cursor: "5",
+				runId: "other",
+				type: "run.phase",
+				payload: {},
+				createdAt: "2026-10-12T12:00:00.000Z",
+			}),
+		}),
+	);
 	source.onerror?.(new Event("error"));
 	assert.deepEqual(events, ["9007199254740994"]);
 	assert.equal(opens, 1);
 	assert.ok(errors >= 1);
-	assert.equal(closed, false, "native reconnect must retain this EventSource and its Last-Event-ID");
+	assert.equal(
+		closed,
+		false,
+		"native reconnect must retain this EventSource and its Last-Event-ID",
+	);
 	unsubscribe();
 	assert.equal(closed, true);
 });
